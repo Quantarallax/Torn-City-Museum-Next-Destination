@@ -5,8 +5,8 @@
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
-// @updateURL    https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
-// @downloadURL  https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
+// @updateURL    https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
+// @downloadURL  https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
 // @license      MIT
 // @grant        GM_setValue
 // @grant        GM_getValue
