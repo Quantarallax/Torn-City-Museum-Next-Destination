@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.14
+// @version      1.0.15
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
-// @updateURL    https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
-// @downloadURL  https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
+// @updateURL    https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
+// @downloadURL  https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
 // @license      MIT
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.14';
+  const VERSION = '1.0.15';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
