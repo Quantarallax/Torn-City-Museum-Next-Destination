@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.16
+// @version      1.0.17
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.16';
+  const VERSION = '1.0.17';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -430,17 +430,12 @@
 
   async function fetchCalendarData(apiKey) {
     /*
-     * The Torn calendar selection requires API v2.
-     * v2 endpoint: https://api.torn.com/v2/user?selections=calendar&key=
-     *
-     * v2 wraps responses differently from v1. Known possible structures:
-     *   { "calendar": [ { "title": "Museum Day", "start": 1234567890, ... } ] }
-     *   { "data": { "calendar": [ ... ] } }
-     *
-     * We log the full top-level keys and first 600 chars for debugging.
+     * Torn API v2 calendar endpoint: /v2/torn/calendar
+     * Returns events with title, start, end, description, fixed_start_time.
+     * Museum Day events have title === "Museum Day".
      */
     try {
-      const calUrl = API_V2_BASE + 'user?selections=calendar&key=' + apiKey;
+      const calUrl = API_V2_BASE + 'torn/calendar?key=' + apiKey;
       const response = await fetch(calUrl);
       if (!response.ok) {
         throw new Error('HTTP ' + response.status);
@@ -1236,95 +1231,135 @@
    *                             "start": 1234567890 } } }
    */
 
+  /* =========================================================
+   * MUSEUM DAY COUNTDOWN — LIVE TICKER
+   * =========================================================
+   *
+   * Fetches from v2/torn/calendar, finds the next "Museum Day"
+   * event, then starts a 1-second setInterval that renders:
+   *   "3 days until museum day on Saturday 7 June 2025 (3d 2h 45m 12s)"
+   *
+   * Displays "No calendar found" when no API key is set.
+   * Clears any running interval before starting a new one.
+   */
+
+  let tcmndCountdownInterval = null;
+  let tcmndMuseumTimestamp = null;
+
+  function formatLiveCountdown(targetSec) {
+    const nowSec = Math.floor(Date.now() / 1000);
+    let remaining = targetSec - nowSec;
+    if (remaining < 0) remaining = 0;
+
+    const d = Math.floor(remaining / 86400);
+    remaining -= d * 86400;
+    const h = Math.floor(remaining / 3600);
+    remaining -= h * 3600;
+    const m = Math.floor(remaining / 60);
+    const s = remaining - m * 60;
+
+    return String(d) + 'd ' + String(h) + 'h ' + String(m) + 'm ' + String(s) + 's';
+  }
+
+  function startCountdownTicker(targetSec, staticPrefix) {
+    if (tcmndCountdownInterval) {
+      clearInterval(tcmndCountdownInterval);
+      tcmndCountdownInterval = null;
+    }
+    tcmndMuseumTimestamp = targetSec;
+
+    function tick() {
+      const el = document.getElementById('tcmnd-countdown');
+      if (!el) {
+        clearInterval(tcmndCountdownInterval);
+        tcmndCountdownInterval = null;
+        return;
+      }
+      el.textContent = staticPrefix + ' (' + formatLiveCountdown(tcmndMuseumTimestamp) + ')';
+    }
+
+    tick();
+    tcmndCountdownInterval = setInterval(tick, 1000);
+  }
+
   async function updateMuseumDayCountdown(apiKey) {
     const countdownEl = document.getElementById('tcmnd-countdown');
     if (!countdownEl) return;
 
+    // Clear any running ticker before starting fresh
+    if (tcmndCountdownInterval) {
+      clearInterval(tcmndCountdownInterval);
+      tcmndCountdownInterval = null;
+    }
+
     if (!apiKey) {
-      countdownEl.textContent = '';
+      countdownEl.textContent = 'No calendar found';
       return;
     }
 
     const calData = await fetchCalendarData(apiKey);
-
-    // Log full raw response for structure diagnosis (truncated to 600 chars)
-    console.log(LOG_TAG, 'Calendar API raw response:', JSON.stringify(calData).substring(0, 600));
+    console.log(LOG_TAG, 'Calendar API raw (600 chars):', JSON.stringify(calData).substring(0, 600));
 
     if (!calData) {
-      countdownEl.textContent = '';
+      countdownEl.textContent = 'No calendar found';
       return;
     }
 
     if (calData.error) {
-      console.log(LOG_TAG, 'Calendar API error — code:', calData.error.code, 'message:', calData.error.error);
-      countdownEl.textContent = '';
+      console.log(LOG_TAG, 'Calendar API error — code:', calData.error.code, 'msg:', calData.error.error);
+      countdownEl.textContent = 'No calendar found';
       return;
     }
 
-    console.log(LOG_TAG, 'Calendar API top-level keys:', Object.keys(calData).join(', '));
+    console.log(LOG_TAG, 'Calendar top-level keys:', Object.keys(calData).join(', '));
 
-    /*
-     * v2 may wrap in a 'data' envelope or return 'calendar' at the top level.
-     * We also check for an 'events' key as a fallback.
-     */
-    const calRaw = calData.calendar || (calData.data && calData.data.calendar) || calData.events || null;
+    // torn/calendar may return { calendar: [...] } or { events: [...] } or a bare array
+    const calRaw = calData.calendar || calData.events || calData.data || null;
+    const events = Array.isArray(calRaw) ? calRaw
+      : (calRaw && typeof calRaw === 'object') ? Object.values(calRaw)
+      : Array.isArray(calData) ? calData
+      : [];
 
-    if (!calRaw) {
-      console.log(LOG_TAG, 'No calendar/events array found in response. Full keys:', Object.keys(calData).join(', '));
-      countdownEl.textContent = '';
-      return;
-    }
-
-    const events = Array.isArray(calRaw) ? calRaw : Object.values(calRaw);
-    console.log(LOG_TAG, 'Calendar events count:', events.length);
+    console.log(LOG_TAG, 'Calendar event count:', events.length);
     if (events.length > 0) {
-      console.log(LOG_TAG, 'First event sample:', JSON.stringify(events[0]).substring(0, 200));
+      console.log(LOG_TAG, 'First event:', JSON.stringify(events[0]).substring(0, 200));
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    let nearestTimestamp = null;
+    let nearestSec = null;
 
     events.forEach(function (ev) {
       if (!ev) return;
       const title = String(ev.title || ev.name || ev.event || ev.type || '').toLowerCase();
       if (!title.includes('museum')) return;
-
-      const evTime = ev.start || ev.begin || ev.time || ev.timestamp || ev.startTime;
-      if (!evTime) return;
-
-      const evSec = Number(evTime);
+      const evSec = Number(ev.start || ev.begin || ev.time || ev.timestamp || ev.startTime || 0);
       if (evSec < nowSec) return;
-
-      if (nearestTimestamp === null || evSec < nearestTimestamp) {
-        nearestTimestamp = evSec;
-      }
+      if (nearestSec === null || evSec < nearestSec) nearestSec = evSec;
     });
 
-    if (nearestTimestamp === null) {
-      console.log(LOG_TAG, 'No upcoming museum event found. Event titles seen:', events.slice(0, 10).map(function (e) {
-        return String(e.title || e.name || e.event || e.type || '?');
+    if (nearestSec === null) {
+      console.log(LOG_TAG, 'No upcoming museum event. Event titles:', events.slice(0, 10).map(function (e) {
+        return String(e.title || e.name || e.type || '?');
       }).join(', '));
-      countdownEl.textContent = '';
+      countdownEl.textContent = 'No calendar found';
       return;
     }
 
-    const msUntil = (nearestTimestamp * 1000) - Date.now();
+    const msUntil = (nearestSec * 1000) - Date.now();
     const daysUntil = Math.ceil(msUntil / 86400000);
-    const eventDate = new Date(nearestTimestamp * 1000);
+    const evDate = new Date(nearestSec * 1000);
 
     const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
       'July', 'August', 'September', 'October', 'November', 'December'];
 
-    const dayName = DAY_NAMES[eventDate.getUTCDay()];
-    const dayNum = eventDate.getUTCDate();
-    const monthName = MONTH_NAMES[eventDate.getUTCMonth()];
-    const year = eventDate.getUTCFullYear();
-
-    const dateStr = dayName + ' ' + String(dayNum) + ' ' + monthName + ' ' + String(year);
+    const dateStr = DAY_NAMES[evDate.getUTCDay()] + ' ' + String(evDate.getUTCDate()) + ' ' +
+      MONTH_NAMES[evDate.getUTCMonth()] + ' ' + String(evDate.getUTCFullYear());
     const dayWord = daysUntil === 1 ? 'day' : 'days';
-    countdownEl.textContent = String(daysUntil) + ' ' + dayWord + ' until museum day on ' + dateStr;
-    console.log(LOG_TAG, 'Museum day countdown:', countdownEl.textContent);
+    const staticPrefix = String(daysUntil) + ' ' + dayWord + ' until museum day on ' + dateStr;
+
+    startCountdownTicker(nearestSec, staticPrefix);
+    console.log(LOG_TAG, 'Museum day:', staticPrefix);
   }
 
   /* =========================================================
