@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.15
+// @version      1.0.16
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,13 +21,14 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.15';
+  const VERSION = '1.0.16';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
   const STORAGE_KEY_PANEL_LEFT = 'tcmnd_panelLeft';
   const STORAGE_KEY_PANEL_TOP = 'tcmnd_panelTop';
   const API_BASE = 'https://api.torn.com/user/';
+  const API_V2_BASE = 'https://api.torn.com/v2/';
   const LOG_TAG = '[TCMND]';
 
   /**
@@ -428,8 +429,18 @@
   }
 
   async function fetchCalendarData(apiKey) {
+    /*
+     * The Torn calendar selection requires API v2.
+     * v2 endpoint: https://api.torn.com/v2/user?selections=calendar&key=
+     *
+     * v2 wraps responses differently from v1. Known possible structures:
+     *   { "calendar": [ { "title": "Museum Day", "start": 1234567890, ... } ] }
+     *   { "data": { "calendar": [ ... ] } }
+     *
+     * We log the full top-level keys and first 600 chars for debugging.
+     */
     try {
-      const calUrl = API_BASE + '?selections=calendar&key=' + apiKey;
+      const calUrl = API_V2_BASE + 'user?selections=calendar&key=' + apiKey;
       const response = await fetch(calUrl);
       if (!response.ok) {
         throw new Error('HTTP ' + response.status);
@@ -1235,39 +1246,54 @@
     }
 
     const calData = await fetchCalendarData(apiKey);
-    if (!calData || calData.error) {
-      console.log(LOG_TAG, 'Calendar API error or no data:', calData ? calData.error : 'null');
+
+    // Log full raw response for structure diagnosis (truncated to 600 chars)
+    console.log(LOG_TAG, 'Calendar API raw response:', JSON.stringify(calData).substring(0, 600));
+
+    if (!calData) {
       countdownEl.textContent = '';
       return;
     }
 
-    console.log(LOG_TAG, 'Calendar API keys:', Object.keys(calData).join(', '));
+    if (calData.error) {
+      console.log(LOG_TAG, 'Calendar API error — code:', calData.error.code, 'message:', calData.error.error);
+      countdownEl.textContent = '';
+      return;
+    }
 
-    // Support both array and object formats for calendar entries
-    const calRaw = calData.calendar;
+    console.log(LOG_TAG, 'Calendar API top-level keys:', Object.keys(calData).join(', '));
+
+    /*
+     * v2 may wrap in a 'data' envelope or return 'calendar' at the top level.
+     * We also check for an 'events' key as a fallback.
+     */
+    const calRaw = calData.calendar || (calData.data && calData.data.calendar) || calData.events || null;
+
     if (!calRaw) {
-      console.log(LOG_TAG, 'No calendar key in API response.');
+      console.log(LOG_TAG, 'No calendar/events array found in response. Full keys:', Object.keys(calData).join(', '));
       countdownEl.textContent = '';
       return;
     }
-
-    console.log(LOG_TAG, 'Calendar raw (first 400 chars):', JSON.stringify(calRaw).substring(0, 400));
 
     const events = Array.isArray(calRaw) ? calRaw : Object.values(calRaw);
+    console.log(LOG_TAG, 'Calendar events count:', events.length);
+    if (events.length > 0) {
+      console.log(LOG_TAG, 'First event sample:', JSON.stringify(events[0]).substring(0, 200));
+    }
+
     const nowSec = Math.floor(Date.now() / 1000);
     let nearestTimestamp = null;
 
     events.forEach(function (ev) {
       if (!ev) return;
-      const title = String(ev.title || ev.name || ev.event || '').toLowerCase();
+      const title = String(ev.title || ev.name || ev.event || ev.type || '').toLowerCase();
       if (!title.includes('museum')) return;
 
-      // Prefer the start/begin time; fall back to the event timestamp itself
-      const evTime = ev.start || ev.begin || ev.time || ev.timestamp;
+      const evTime = ev.start || ev.begin || ev.time || ev.timestamp || ev.startTime;
       if (!evTime) return;
 
       const evSec = Number(evTime);
-      if (evSec < nowSec) return; // Already passed
+      if (evSec < nowSec) return;
 
       if (nearestTimestamp === null || evSec < nearestTimestamp) {
         nearestTimestamp = evSec;
@@ -1275,7 +1301,9 @@
     });
 
     if (nearestTimestamp === null) {
-      console.log(LOG_TAG, 'No upcoming museum event found in calendar.');
+      console.log(LOG_TAG, 'No upcoming museum event found. Event titles seen:', events.slice(0, 10).map(function (e) {
+        return String(e.title || e.name || e.event || e.type || '?');
+      }).join(', '));
       countdownEl.textContent = '';
       return;
     }
