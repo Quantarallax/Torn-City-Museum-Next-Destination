@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.13
+// @version      1.0.14
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
-// @updateURL    https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
-// @downloadURL  https://github.com/Quantarallax/Torn-City-Museum-Next-Destination/raw/refs/heads/main/Torn%20City%20Museum%20Next%20Destination.user.js
+// @updateURL    https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
+// @downloadURL  https://github.com/Quantarallax/TBD/raw/refs/heads/main/TBD.user.js
 // @license      MIT
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.13';
+  const VERSION = '1.0.14';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -171,7 +171,17 @@
       align-items: center;
       gap: 6px;
       margin-left: 8px;
+      margin-top: 2em;
       vertical-align: middle;
+    }
+    #tcmnd-countdown {
+      display: block;
+      font-size: 11px;
+      font-family: 'Lucida Console', 'Courier New', monospace;
+      color: #8888cc;
+      margin-top: 4px;
+      min-height: 1em;
+      padding-left: 4px;
     }
     #tcmnd-cog {
       display: inline-flex;
@@ -414,6 +424,20 @@
     } catch (err) {
       console.error(LOG_TAG, 'fetchBasicProfile failed:', err);
       throw err;
+    }
+  }
+
+  async function fetchCalendarData(apiKey) {
+    try {
+      const calUrl = API_BASE + '?selections=calendar&key=' + apiKey;
+      const response = await fetch(calUrl);
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+      }
+      return response.json();
+    } catch (err) {
+      console.error(LOG_TAG, 'fetchCalendarData failed:', err);
+      return null;
     }
   }
 
@@ -1173,10 +1197,106 @@
     const parentEl = targetEl.parentElement || targetEl;
     parentEl.appendChild(toolbar);
 
+    // Countdown sits on its own line directly below the toolbar
+    const countdown = document.createElement('span');
+    countdown.id = 'tcmnd-countdown';
+    parentEl.appendChild(countdown);
+
     const rect = parentEl.getBoundingClientRect();
     cogAnchorTop = rect.top + window.scrollY;
 
     updateCogStatus();
+  }
+
+  /* =========================================================
+   * MUSEUM DAY COUNTDOWN
+   * =========================================================
+   *
+   * Fetches the Torn calendar via API and finds the next event
+   * whose title contains "museum" (case-insensitive). Displays
+   * the result in the format:
+   *   "[X] days until museum day on [Day D Month YYYY]"
+   *
+   * The countdown element is left blank if no API key is set
+   * or if no museum event is found in the calendar data.
+   *
+   * Torn's calendar API returns an object keyed by event ID:
+   *   { "calendar": { "123": { "title": "Museum Day",
+   *                             "start": 1234567890 } } }
+   */
+
+  async function updateMuseumDayCountdown(apiKey) {
+    const countdownEl = document.getElementById('tcmnd-countdown');
+    if (!countdownEl) return;
+
+    if (!apiKey) {
+      countdownEl.textContent = '';
+      return;
+    }
+
+    const calData = await fetchCalendarData(apiKey);
+    if (!calData || calData.error) {
+      console.log(LOG_TAG, 'Calendar API error or no data:', calData ? calData.error : 'null');
+      countdownEl.textContent = '';
+      return;
+    }
+
+    console.log(LOG_TAG, 'Calendar API keys:', Object.keys(calData).join(', '));
+
+    // Support both array and object formats for calendar entries
+    const calRaw = calData.calendar;
+    if (!calRaw) {
+      console.log(LOG_TAG, 'No calendar key in API response.');
+      countdownEl.textContent = '';
+      return;
+    }
+
+    console.log(LOG_TAG, 'Calendar raw (first 400 chars):', JSON.stringify(calRaw).substring(0, 400));
+
+    const events = Array.isArray(calRaw) ? calRaw : Object.values(calRaw);
+    const nowSec = Math.floor(Date.now() / 1000);
+    let nearestTimestamp = null;
+
+    events.forEach(function (ev) {
+      if (!ev) return;
+      const title = String(ev.title || ev.name || ev.event || '').toLowerCase();
+      if (!title.includes('museum')) return;
+
+      // Prefer the start/begin time; fall back to the event timestamp itself
+      const evTime = ev.start || ev.begin || ev.time || ev.timestamp;
+      if (!evTime) return;
+
+      const evSec = Number(evTime);
+      if (evSec < nowSec) return; // Already passed
+
+      if (nearestTimestamp === null || evSec < nearestTimestamp) {
+        nearestTimestamp = evSec;
+      }
+    });
+
+    if (nearestTimestamp === null) {
+      console.log(LOG_TAG, 'No upcoming museum event found in calendar.');
+      countdownEl.textContent = '';
+      return;
+    }
+
+    const msUntil = (nearestTimestamp * 1000) - Date.now();
+    const daysUntil = Math.ceil(msUntil / 86400000);
+    const eventDate = new Date(nearestTimestamp * 1000);
+
+    const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+      'July', 'August', 'September', 'October', 'November', 'December'];
+
+    const dayName = DAY_NAMES[eventDate.getUTCDay()];
+    const dayNum = eventDate.getUTCDate();
+    const monthName = MONTH_NAMES[eventDate.getUTCMonth()];
+    const year = eventDate.getUTCFullYear();
+
+    const dateStr = dayName + ' ' + String(dayNum) + ' ' + monthName + ' ' + String(year);
+    const dayWord = daysUntil === 1 ? 'day' : 'days';
+    countdownEl.textContent = String(daysUntil) + ' ' + dayWord + ' until museum day on ' + dateStr;
+    console.log(LOG_TAG, 'Museum day countdown:', countdownEl.textContent);
   }
 
   /* =========================================================
@@ -1217,6 +1337,9 @@
         console.error(LOG_TAG, 'fetchDisplayData failed:', fetchErr);
         // Non-fatal — DOM counts can still work without API
       }
+
+      // Update museum day countdown (non-blocking — errors are swallowed internally)
+      updateMuseumDayCountdown(apiKey);
 
       // Build ID→name map (diagnostic)
       buildIdToNameMapFromDOM();
