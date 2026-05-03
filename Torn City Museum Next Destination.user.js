@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.18
+// @version      1.0.19
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.18';
+  const VERSION = '1.0.19';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -981,10 +981,11 @@
       'Entering a new key replaces any previously saved key.' +
       '</p>' +
       '<p class="tcmnd-api-note">' +
-      'Your key is used to read your <strong>display cabinet</strong> totals ' +
-      'from the Torn API. Inventory counts are read directly from the museum page. ' +
-      'Both are combined for the full total. ' +
-      'The key is stored locally and is ' +
+      'Your key is used for three purposes: (1) reading your ' +
+      '<strong>display cabinet</strong> totals to add to inventory counts; ' +
+      '(2) fetching the Torn <strong>calendar</strong> to compute the museum day countdown; ' +
+      '(3) <strong>verifying your identity</strong> when testing the connection. ' +
+      'The key is stored locally in your browser only and is ' +
       '<strong>never shared with any third party</strong>.' +
       '</p>' +
 
@@ -1311,7 +1312,8 @@
     }
 
     const calData = await fetchCalendarData(apiKey);
-    console.log(LOG_TAG, 'Calendar API raw (600 chars):', JSON.stringify(calData).substring(0, 600));
+    // Log complete raw response — no character limit
+    console.log(LOG_TAG, 'Calendar API raw response:', JSON.stringify(calData));
 
     function setNoCalendar(reason) {
       console.log(LOG_TAG, 'No calendar found:', reason);
@@ -1336,28 +1338,39 @@
       : [];
 
     console.log(LOG_TAG, 'Calendar event count:', events.length);
-    if (events.length > 0) {
-      console.log(LOG_TAG, 'First event:', JSON.stringify(events[0]).substring(0, 200));
-    }
+
+    // Log every event title and start — no truncation — for diagnosis
+    events.forEach(function (ev, idx) {
+      if (!ev) return;
+      const evTitle = String(ev.title || ev.name || '[no title]');
+      const evStart = String(ev.start || ev.begin || ev.time || '[no start]');
+      console.log(LOG_TAG, 'Event[' + String(idx) + ']: title="' + evTitle + '" start=' + evStart);
+    });
 
     const nowSec = Math.floor(Date.now() / 1000);
     let nearestSec = null;
 
     events.forEach(function (ev) {
       if (!ev) return;
-      // Exact title match — "Museum Day" only, ignore all other calendar entries
-      const title = String(ev.title || ev.name || '').trim();
-      if (title !== 'Museum Day') return;
+      // Case-insensitive trim comparison — "Museum Day", "museum day", etc. all match
+      const title = String(ev.title || ev.name || '').trim().toLowerCase();
+      if (title !== 'museum day') {
+        return;
+      }
       const evSec = Number(ev.start || ev.begin || ev.time || ev.timestamp || 0);
-      if (evSec < nowSec) return;
+      if (evSec < nowSec) {
+        console.log(LOG_TAG, 'Museum Day found but in past — start:', String(evSec));
+        return;
+      }
+      console.log(LOG_TAG, 'Museum Day candidate — start:', String(evSec));
       if (nearestSec === null || evSec < nearestSec) nearestSec = evSec;
     });
 
     if (nearestSec === null) {
-      const titlesFound = events.slice(0, 10).map(function (e) {
-        return String(e.title || e.name || '?');
+      const titlesFound = events.map(function (e) {
+        return '"' + String(e.title || e.name || '?') + '"';
       }).join(', ');
-      setNoCalendar('no future Museum Day event found. Titles seen: ' + titlesFound);
+      setNoCalendar('no future Museum Day event found. All titles: ' + titlesFound);
       return;
     }
 
