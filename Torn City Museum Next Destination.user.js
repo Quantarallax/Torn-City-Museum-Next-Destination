@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.19
+// @version      1.0.20
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.19';
+  const VERSION = '1.0.20';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1330,47 +1330,60 @@
 
     console.log(LOG_TAG, 'Calendar top-level keys:', Object.keys(calData).join(', '));
 
-    // torn/calendar returns { calendar: [...] }, { events: [...] } or a bare array
-    const calRaw = calData.calendar || calData.events || calData.data || null;
-    const events = Array.isArray(calRaw) ? calRaw
-      : (calRaw && typeof calRaw === 'object') ? Object.values(calRaw)
-      : Array.isArray(calData) ? calData
-      : [];
+    /*
+     * Recursive Museum Day finder.
+     *
+     * Torn's calendar API response nesting varies between versions.
+     * Rather than assume a fixed structure, walk the entire response
+     * tree and collect every object that has:
+     *   - title (case-insensitive) === "museum day"
+     *   - a numeric start timestamp
+     *
+     * This works for: flat arrays, objects keyed by ID, objects keyed
+     * by event type, nested category wrappers, or any combination.
+     */
+    function collectMuseumDayEvents(node, accumulator) {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          collectMuseumDayEvents(node[i], accumulator);
+        }
+        return;
+      }
+      // Is this node itself a Museum Day event?
+      const nodeTitle = String(node.title || node.name || '').trim().toLowerCase();
+      const nodeStart = node.start || node.begin || node.time || node.timestamp;
+      if (nodeTitle === 'museum day' && nodeStart) {
+        accumulator.push({ title: String(node.title), start: Number(nodeStart) });
+        console.log(LOG_TAG, 'Museum Day found — start:', String(nodeStart),
+          '(' + new Date(Number(nodeStart) * 1000).toUTCString() + ')');
+        return;
+      }
+      // Otherwise descend into child values
+      const vals = Object.values(node);
+      for (let i = 0; i < vals.length; i++) {
+        collectMuseumDayEvents(vals[i], accumulator);
+      }
+    }
 
-    console.log(LOG_TAG, 'Calendar event count:', events.length);
-
-    // Log every event title and start — no truncation — for diagnosis
-    events.forEach(function (ev, idx) {
-      if (!ev) return;
-      const evTitle = String(ev.title || ev.name || '[no title]');
-      const evStart = String(ev.start || ev.begin || ev.time || '[no start]');
-      console.log(LOG_TAG, 'Event[' + String(idx) + ']: title="' + evTitle + '" start=' + evStart);
-    });
+    const museumDayEvents = [];
+    collectMuseumDayEvents(calData, museumDayEvents);
+    console.log(LOG_TAG, 'Museum Day events found:', museumDayEvents.length);
 
     const nowSec = Math.floor(Date.now() / 1000);
     let nearestSec = null;
 
-    events.forEach(function (ev) {
-      if (!ev) return;
-      // Case-insensitive trim comparison — "Museum Day", "museum day", etc. all match
-      const title = String(ev.title || ev.name || '').trim().toLowerCase();
-      if (title !== 'museum day') {
-        return;
-      }
-      const evSec = Number(ev.start || ev.begin || ev.time || ev.timestamp || 0);
+    for (let i = 0; i < museumDayEvents.length; i++) {
+      const evSec = museumDayEvents[i].start;
       if (evSec < nowSec) {
-        console.log(LOG_TAG, 'Museum Day found but in past — start:', String(evSec));
-        return;
+        console.log(LOG_TAG, 'Museum Day in past — skipping:', String(evSec));
+        continue;
       }
-      console.log(LOG_TAG, 'Museum Day candidate — start:', String(evSec));
       if (nearestSec === null || evSec < nearestSec) nearestSec = evSec;
-    });
+    }
 
     if (nearestSec === null) {
-      const titlesFound = events.map(function (e) {
-        return '"' + String(e.title || e.name || '?') + '"';
-      }).join(', ');
-      setNoCalendar('no future Museum Day event found. All titles: ' + titlesFound);
+      setNoCalendar('no future Museum Day found (searched ' + String(museumDayEvents.length) + ' Museum Day events in response)');
       return;
     }
 
