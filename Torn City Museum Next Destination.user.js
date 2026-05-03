@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.17
+// @version      1.0.18
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.17';
+  const VERSION = '1.0.18';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -206,6 +206,13 @@
       font-size: 11px;
       font-family: 'Lucida Console', 'Courier New', monospace;
       white-space: nowrap;
+    }
+    #tcmnd-cal-status {
+      font-size: 11px;
+      font-family: 'Lucida Console', 'Courier New', monospace;
+      color: #666688;
+      white-space: nowrap;
+      margin-left: 6px;
     }
     .tcmnd-api-warn { color: ${COL_RED}; }
     .tcmnd-api-ok { color: ${COL_GREEN}; }
@@ -1197,8 +1204,12 @@
     const statusSpan = document.createElement('span');
     statusSpan.id = 'tcmnd-api-status';
 
+    const calStatusSpan = document.createElement('span');
+    calStatusSpan.id = 'tcmnd-cal-status';
+
     toolbar.appendChild(cog);
     toolbar.appendChild(statusSpan);
+    toolbar.appendChild(calStatusSpan);
 
     const parentEl = targetEl.parentElement || targetEl;
     parentEl.appendChild(toolbar);
@@ -1284,7 +1295,7 @@
 
   async function updateMuseumDayCountdown(apiKey) {
     const countdownEl = document.getElementById('tcmnd-countdown');
-    if (!countdownEl) return;
+    const calStatusEl = document.getElementById('tcmnd-cal-status');
 
     // Clear any running ticker before starting fresh
     if (tcmndCountdownInterval) {
@@ -1293,27 +1304,31 @@
     }
 
     if (!apiKey) {
-      countdownEl.textContent = 'No calendar found';
+      // "No calendar found." shown inline on the cog line; ticker cleared
+      if (calStatusEl) calStatusEl.textContent = 'No calendar found.';
+      if (countdownEl) countdownEl.textContent = '';
       return;
     }
 
     const calData = await fetchCalendarData(apiKey);
     console.log(LOG_TAG, 'Calendar API raw (600 chars):', JSON.stringify(calData).substring(0, 600));
 
-    if (!calData) {
-      countdownEl.textContent = 'No calendar found';
-      return;
+    function setNoCalendar(reason) {
+      console.log(LOG_TAG, 'No calendar found:', reason);
+      if (calStatusEl) calStatusEl.textContent = 'No calendar found.';
+      if (countdownEl) countdownEl.textContent = '';
     }
 
+    if (!calData) { setNoCalendar('null response'); return; }
     if (calData.error) {
-      console.log(LOG_TAG, 'Calendar API error — code:', calData.error.code, 'msg:', calData.error.error);
-      countdownEl.textContent = 'No calendar found';
+      console.log(LOG_TAG, 'Calendar API error code:', calData.error.code, 'msg:', calData.error.error);
+      setNoCalendar('API error ' + String(calData.error.code));
       return;
     }
 
     console.log(LOG_TAG, 'Calendar top-level keys:', Object.keys(calData).join(', '));
 
-    // torn/calendar may return { calendar: [...] } or { events: [...] } or a bare array
+    // torn/calendar returns { calendar: [...] }, { events: [...] } or a bare array
     const calRaw = calData.calendar || calData.events || calData.data || null;
     const events = Array.isArray(calRaw) ? calRaw
       : (calRaw && typeof calRaw === 'object') ? Object.values(calRaw)
@@ -1330,20 +1345,24 @@
 
     events.forEach(function (ev) {
       if (!ev) return;
-      const title = String(ev.title || ev.name || ev.event || ev.type || '').toLowerCase();
-      if (!title.includes('museum')) return;
-      const evSec = Number(ev.start || ev.begin || ev.time || ev.timestamp || ev.startTime || 0);
+      // Exact title match — "Museum Day" only, ignore all other calendar entries
+      const title = String(ev.title || ev.name || '').trim();
+      if (title !== 'Museum Day') return;
+      const evSec = Number(ev.start || ev.begin || ev.time || ev.timestamp || 0);
       if (evSec < nowSec) return;
       if (nearestSec === null || evSec < nearestSec) nearestSec = evSec;
     });
 
     if (nearestSec === null) {
-      console.log(LOG_TAG, 'No upcoming museum event. Event titles:', events.slice(0, 10).map(function (e) {
-        return String(e.title || e.name || e.type || '?');
-      }).join(', '));
-      countdownEl.textContent = 'No calendar found';
+      const titlesFound = events.slice(0, 10).map(function (e) {
+        return String(e.title || e.name || '?');
+      }).join(', ');
+      setNoCalendar('no future Museum Day event found. Titles seen: ' + titlesFound);
       return;
     }
+
+    // Found — clear the inline status and start the live ticker below
+    if (calStatusEl) calStatusEl.textContent = '';
 
     const msUntil = (nearestSec * 1000) - Date.now();
     const daysUntil = Math.ceil(msUntil / 86400000);
