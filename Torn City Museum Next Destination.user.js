@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.20
+// @version      1.0.21
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.20';
+  const VERSION = '1.0.21';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -176,13 +176,12 @@
       vertical-align: middle;
     }
     #tcmnd-countdown {
-      display: block;
+      display: inline;
       font-size: 11px;
       font-family: 'Lucida Console', 'Courier New', monospace;
-      color: #8888cc;
-      margin-top: 4px;
-      min-height: 1em;
-      padding-left: 4px;
+      color: #f5c518;
+      margin-left: 8px;
+      white-space: nowrap;
     }
     #tcmnd-cog {
       display: inline-flex;
@@ -1212,13 +1211,12 @@
     toolbar.appendChild(statusSpan);
     toolbar.appendChild(calStatusSpan);
 
-    const parentEl = targetEl.parentElement || targetEl;
-    parentEl.appendChild(toolbar);
-
-    // Countdown sits on its own line directly below the toolbar
     const countdown = document.createElement('span');
     countdown.id = 'tcmnd-countdown';
-    parentEl.appendChild(countdown);
+    toolbar.appendChild(countdown);
+
+    const parentEl = targetEl.parentElement || targetEl;
+    parentEl.appendChild(toolbar);
 
     const rect = parentEl.getBoundingClientRect();
     cogAnchorTop = rect.top + window.scrollY;
@@ -1312,35 +1310,23 @@
     }
 
     const calData = await fetchCalendarData(apiKey);
-    // Log complete raw response — no character limit
-    console.log(LOG_TAG, 'Calendar API raw response:', JSON.stringify(calData));
-
     function setNoCalendar(reason) {
-      console.log(LOG_TAG, 'No calendar found:', reason);
+      console.log(LOG_TAG, 'Calendar: no Museum Day found —', reason);
       if (calStatusEl) calStatusEl.textContent = 'No calendar found.';
       if (countdownEl) countdownEl.textContent = '';
     }
 
     if (!calData) { setNoCalendar('null response'); return; }
     if (calData.error) {
-      console.log(LOG_TAG, 'Calendar API error code:', calData.error.code, 'msg:', calData.error.error);
+      console.error(LOG_TAG, 'Calendar API error — code:', calData.error.code, 'msg:', calData.error.error);
       setNoCalendar('API error ' + String(calData.error.code));
       return;
     }
 
-    console.log(LOG_TAG, 'Calendar top-level keys:', Object.keys(calData).join(', '));
-
     /*
      * Recursive Museum Day finder.
-     *
-     * Torn's calendar API response nesting varies between versions.
-     * Rather than assume a fixed structure, walk the entire response
-     * tree and collect every object that has:
-     *   - title (case-insensitive) === "museum day"
-     *   - a numeric start timestamp
-     *
-     * This works for: flat arrays, objects keyed by ID, objects keyed
-     * by event type, nested category wrappers, or any combination.
+     * Walks the entire response tree at any nesting depth, collecting
+     * every object with title "museum day" (case-insensitive) and a start field.
      */
     function collectMuseumDayEvents(node, accumulator) {
       if (!node || typeof node !== 'object') return;
@@ -1350,16 +1336,12 @@
         }
         return;
       }
-      // Is this node itself a Museum Day event?
       const nodeTitle = String(node.title || node.name || '').trim().toLowerCase();
       const nodeStart = node.start || node.begin || node.time || node.timestamp;
       if (nodeTitle === 'museum day' && nodeStart) {
         accumulator.push({ title: String(node.title), start: Number(nodeStart) });
-        console.log(LOG_TAG, 'Museum Day found — start:', String(nodeStart),
-          '(' + new Date(Number(nodeStart) * 1000).toUTCString() + ')');
         return;
       }
-      // Otherwise descend into child values
       const vals = Object.values(node);
       for (let i = 0; i < vals.length; i++) {
         collectMuseumDayEvents(vals[i], accumulator);
@@ -1368,26 +1350,22 @@
 
     const museumDayEvents = [];
     collectMuseumDayEvents(calData, museumDayEvents);
-    console.log(LOG_TAG, 'Museum Day events found:', museumDayEvents.length);
 
     const nowSec = Math.floor(Date.now() / 1000);
     let nearestSec = null;
 
     for (let i = 0; i < museumDayEvents.length; i++) {
       const evSec = museumDayEvents[i].start;
-      if (evSec < nowSec) {
-        console.log(LOG_TAG, 'Museum Day in past — skipping:', String(evSec));
-        continue;
-      }
+      if (evSec < nowSec) continue;
       if (nearestSec === null || evSec < nearestSec) nearestSec = evSec;
     }
 
     if (nearestSec === null) {
-      setNoCalendar('no future Museum Day found (searched ' + String(museumDayEvents.length) + ' Museum Day events in response)');
+      setNoCalendar(String(museumDayEvents.length) + ' Museum Day events in calendar, none in future');
       return;
     }
 
-    // Found — clear the inline status and start the live ticker below
+    // Found — clear the inline status and start the live ticker
     if (calStatusEl) calStatusEl.textContent = '';
 
     const msUntil = (nearestSec * 1000) - Date.now();
@@ -1404,7 +1382,7 @@
     const staticPrefix = String(daysUntil) + ' ' + dayWord + ' until museum day on ' + dateStr;
 
     startCountdownTicker(nearestSec, staticPrefix);
-    console.log(LOG_TAG, 'Museum day:', staticPrefix);
+    console.log(LOG_TAG, 'Museum Day:', staticPrefix);
   }
 
   /* =========================================================
