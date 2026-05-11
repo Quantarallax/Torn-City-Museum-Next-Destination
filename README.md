@@ -1,4 +1,4 @@
-# Torn-City-Museum-Next-Destination
+# Torn City Museum Next Destination
 A Torn City tampermonkey script to show your lowest stock or plushies or flowers needed for the museum, complete with country to get them from.
 
 Gives you a visual indicator of which three plushies or which three flowers you should fly out to get based on your three lowest stock of either.
