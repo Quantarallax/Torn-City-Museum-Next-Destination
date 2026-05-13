@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.24
+// @version      1.0.25
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.24';
+  const VERSION = '1.0.25';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -485,7 +485,9 @@
    * Items are matched by name (case-insensitive) rather than ID so the
    * item list doesn't depend on what IDs happen to be visible in the DOM.
    *
-   * Price priority: details.buy_price → details.cost → value → market_value
+   * Price source: item.value.buy_price (the foreign shop buy price).
+   * The v2 API returns "value" as an object:
+   *   { vendor: { country, name }, buy_price, sell_price, market_price }
    */
   async function fetchAndCacheItemPrices(apiKey) {
     if (!apiKey) return;
@@ -508,8 +510,11 @@
         const itemArr = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
 
         if (itemArr.length > 0 && itemArr[0]) {
-          const detailsPreview = itemArr[0].details ? JSON.stringify(itemArr[0].details).substring(0, 150) : 'none';
-          console.log(LOG_TAG, category + ' first item — value:', itemArr[0].value, '| details:', detailsPreview);
+          const v = itemArr[0].value;
+          const vSummary = (v && typeof v === 'object')
+            ? 'buy_price=' + String(v.buy_price) + ' market_price=' + String(v.market_price)
+            : String(v);
+          console.log(LOG_TAG, category + ' first item "' + (itemArr[0].name || '?') + '" — value:', vSummary);
         }
 
         itemArr.forEach(function (item) {
@@ -526,15 +531,19 @@
           }
           if (!matchedName) return;
 
-          // Extract price — look inside details first, then top-level fields
+          /*
+           * The "value" field is an object: { vendor, buy_price, sell_price, market_price }
+           * We want buy_price — the price paid in the foreign country shop.
+           * Fall back to market_price if buy_price is absent.
+           */
           let price = 0;
-          if (item.details && typeof item.details === 'object') {
-            price = item.details.buy_price || item.details.native_buy_price ||
-              item.details.cost || item.details.shop_price || 0;
+          if (item.value && typeof item.value === 'object') {
+            price = item.value.buy_price || item.value.market_price || 0;
+          } else if (typeof item.value === 'number') {
+            price = item.value;
           }
           if (!price) {
-            price = item.value || item.market_value || item.sell_price ||
-              item.buy_price || item.cost || 0;
+            price = item.market_value || item.buy_price || item.sell_price || item.cost || 0;
           }
 
           if (price > 0) {
