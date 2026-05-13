@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.22
+// @version      1.0.23
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.22';
+  const VERSION = '1.0.23';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -494,22 +494,55 @@
         return;
       }
 
-      // v2 may return { items: [{...}] } or { items: {"186": {...}} }
+      /*
+       * The v2 torn/items endpoint may return items keyed by their ID:
+       *   { "items": { "186": { "name": "...", "market_value": 2000, ... } } }
+       * In that case item.id is undefined — the ID lives in the object key.
+       * We build an itemArr that always has { id, ...properties } populated.
+       */
       const rawItems = data.items || data;
-      const itemArr = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+      let itemArr;
+
+      if (Array.isArray(rawItems)) {
+        itemArr = rawItems;
+      } else if (rawItems && typeof rawItems === 'object') {
+        itemArr = Object.keys(rawItems).map(function (key) {
+          const item = rawItems[key];
+          if (!item || typeof item !== 'object') return null;
+          // Inject the key as the ID when the property is absent
+          if (!item.id && !item.ID) {
+            item.id = key;
+          }
+          return item;
+        });
+      } else {
+        itemArr = [];
+      }
+
+      // Log the first item structure so field names are visible in console
+      if (itemArr.length > 0 && itemArr[0]) {
+        console.log(LOG_TAG, 'Item prices — first item keys:', Object.keys(itemArr[0]).join(', '));
+      }
 
       itemArr.forEach(function (item) {
         if (!item) return;
         const itemId = String(item.id || item.ID || '');
         const name = idToName[itemId];
         if (!name) return;
-        const price = item.market_value || item.sell_price || item.value || 0;
+        // Try all known price field names across API versions
+        const price = item.market_value || item.sell_price || item.buy_price ||
+          item.cost || item.shop_price || item.value || 0;
         if (price > 0) {
           tcmndItemPrices[name] = Math.round(Number(price));
         }
       });
 
       console.log(LOG_TAG, 'Item prices cached:', Object.keys(tcmndItemPrices).length, 'items');
+      if (Object.keys(tcmndItemPrices).length > 0) {
+        console.log(LOG_TAG, 'Sample prices:', Object.keys(tcmndItemPrices).slice(0, 4).map(function (n) {
+          return n + '=' + formatItemPrice(tcmndItemPrices[n]);
+        }).join(', '));
+      }
     } catch (err) {
       console.error(LOG_TAG, 'fetchAndCacheItemPrices failed:', err);
     }
