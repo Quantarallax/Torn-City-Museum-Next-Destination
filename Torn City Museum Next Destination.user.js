@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.23
+// @version      1.0.24
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.23';
+  const VERSION = '1.0.24';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -471,80 +471,90 @@
   }
 
   /**
-   * Item price cache — maps item name → market value integer.
-   * Populated by fetchAndCacheItemPrices() using the Torn v2 items endpoint.
+   * Item price cache — maps item name → buy price integer.
+   * Populated by fetchAndCacheItemPrices() using the Torn v2 category endpoints.
    * Persists across highlight re-runs so we only fetch once per session.
    */
   let tcmndItemPrices = {};
 
-  async function fetchAndCacheItemPrices(apiKey, idToName) {
-    const itemIds = Object.keys(idToName);
-    if (!itemIds.length || !apiKey) return;
+  /**
+   * Fetch all plushie and flower buy prices using the correct category endpoints:
+   *   /v2/torn/items?cat=Plushie&sort=ASC
+   *   /v2/torn/items?cat=Flower&sort=ASC
+   *
+   * Items are matched by name (case-insensitive) rather than ID so the
+   * item list doesn't depend on what IDs happen to be visible in the DOM.
+   *
+   * Price priority: details.buy_price → details.cost → value → market_value
+   */
+  async function fetchAndCacheItemPrices(apiKey) {
+    if (!apiKey) return;
 
-    try {
-      const url = API_V2_BASE + 'torn/items?ids=' + itemIds.join(',') + '&key=' + apiKey;
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error('HTTP ' + response.status);
-      }
-      const data = await response.json();
-
-      if (!data || data.error) {
-        console.error(LOG_TAG, 'Item prices API error:', data ? data.error : 'null');
-        return;
-      }
-
-      /*
-       * The v2 torn/items endpoint may return items keyed by their ID:
-       *   { "items": { "186": { "name": "...", "market_value": 2000, ... } } }
-       * In that case item.id is undefined — the ID lives in the object key.
-       * We build an itemArr that always has { id, ...properties } populated.
-       */
-      const rawItems = data.items || data;
-      let itemArr;
-
-      if (Array.isArray(rawItems)) {
-        itemArr = rawItems;
-      } else if (rawItems && typeof rawItems === 'object') {
-        itemArr = Object.keys(rawItems).map(function (key) {
-          const item = rawItems[key];
-          if (!item || typeof item !== 'object') return null;
-          // Inject the key as the ID when the property is absent
-          if (!item.id && !item.ID) {
-            item.id = key;
-          }
-          return item;
-        });
-      } else {
-        itemArr = [];
-      }
-
-      // Log the first item structure so field names are visible in console
-      if (itemArr.length > 0 && itemArr[0]) {
-        console.log(LOG_TAG, 'Item prices — first item keys:', Object.keys(itemArr[0]).join(', '));
-      }
-
-      itemArr.forEach(function (item) {
-        if (!item) return;
-        const itemId = String(item.id || item.ID || '');
-        const name = idToName[itemId];
-        if (!name) return;
-        // Try all known price field names across API versions
-        const price = item.market_value || item.sell_price || item.buy_price ||
-          item.cost || item.shop_price || item.value || 0;
-        if (price > 0) {
-          tcmndItemPrices[name] = Math.round(Number(price));
+    async function fetchCategoryPrices(category) {
+      try {
+        const url = API_V2_BASE + 'torn/items?cat=' + category + '&sort=ASC&key=' + apiKey;
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error('HTTP ' + response.status);
         }
-      });
+        const data = await response.json();
 
-      console.log(LOG_TAG, 'Item prices cached:', Object.keys(tcmndItemPrices).length, 'items');
-      if (Object.keys(tcmndItemPrices).length > 0) {
-        console.log(LOG_TAG, 'Sample prices:', Object.keys(tcmndItemPrices).slice(0, 4).map(function (n) {
-          return n + '=' + formatItemPrice(tcmndItemPrices[n]);
-        }).join(', '));
+        if (!data || data.error) {
+          console.error(LOG_TAG, 'Item prices (' + category + ') API error:', data ? data.error : 'null');
+          return;
+        }
+
+        const rawItems = data.items || data;
+        const itemArr = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+
+        if (itemArr.length > 0 && itemArr[0]) {
+          const detailsPreview = itemArr[0].details ? JSON.stringify(itemArr[0].details).substring(0, 150) : 'none';
+          console.log(LOG_TAG, category + ' first item — value:', itemArr[0].value, '| details:', detailsPreview);
+        }
+
+        itemArr.forEach(function (item) {
+          if (!item || !item.name) return;
+
+          // Match item name case-insensitively against our known lists
+          const lcItemName = item.name.trim().toLowerCase();
+          let matchedName = null;
+          for (let ni = 0; ni < ALL_ITEM_NAMES.length; ni++) {
+            if (ALL_ITEM_NAMES[ni].toLowerCase() === lcItemName) {
+              matchedName = ALL_ITEM_NAMES[ni];
+              break;
+            }
+          }
+          if (!matchedName) return;
+
+          // Extract price — look inside details first, then top-level fields
+          let price = 0;
+          if (item.details && typeof item.details === 'object') {
+            price = item.details.buy_price || item.details.native_buy_price ||
+              item.details.cost || item.details.shop_price || 0;
+          }
+          if (!price) {
+            price = item.value || item.market_value || item.sell_price ||
+              item.buy_price || item.cost || 0;
+          }
+
+          if (price > 0) {
+            tcmndItemPrices[matchedName] = Math.round(Number(price));
+          }
+        });
+      } catch (err) {
+        console.error(LOG_TAG, 'fetchCategoryPrices (' + category + ') failed:', err);
       }
-    } catch (err) {
-      console.error(LOG_TAG, 'fetchAndCacheItemPrices failed:', err);
+    }
+
+    await fetchCategoryPrices('Plushie');
+    await fetchCategoryPrices('Flower');
+
+    const cached = Object.keys(tcmndItemPrices).length;
+    console.log(LOG_TAG, 'Item prices cached:', cached, 'items');
+    if (cached > 0) {
+      console.log(LOG_TAG, 'Sample prices:', Object.keys(tcmndItemPrices).slice(0, 4).map(function (n) {
+        return n + '=' + formatItemPrice(tcmndItemPrices[n]);
+      }).join(', '));
     }
   }
 
@@ -1535,7 +1545,7 @@
 
       // Build ID→name map (diagnostic) and fetch buy prices for hover tooltips
       const idToName = buildIdToNameMapFromDOM();
-      fetchAndCacheItemPrices(apiKey, idToName); // non-blocking — prices populate async
+      fetchAndCacheItemPrices(apiKey); // non-blocking — prices populate async
 
       // Clear BEFORE reading DOM counts so old badge numbers don't pollute the read
       clearHighlights();
