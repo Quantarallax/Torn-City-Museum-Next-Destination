@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.21
+// @version      1.0.22
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.21';
+  const VERSION = '1.0.22';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -167,6 +167,23 @@
     .tcmnd-badge-red { background: ${COL_RED}; }
     .tcmnd-badge-yellow { background: #c9a300; }
     .tcmnd-badge-green { background: #2a9058; }
+    .tcmnd-price-tip {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(10, 10, 20, 0.92);
+      color: #f5c518;
+      font-size: 12px;
+      font-weight: 700;
+      font-family: 'Lucida Console', 'Courier New', monospace;
+      padding: 5px 10px;
+      border-radius: 5px;
+      border: 1px solid #f5c51866;
+      pointer-events: none;
+      z-index: 200;
+      white-space: nowrap;
+    }
     #tcmnd-toolbar {
       display: inline-flex;
       align-items: center;
@@ -451,6 +468,55 @@
       console.error(LOG_TAG, 'fetchCalendarData failed:', err);
       return null;
     }
+  }
+
+  /**
+   * Item price cache — maps item name → market value integer.
+   * Populated by fetchAndCacheItemPrices() using the Torn v2 items endpoint.
+   * Persists across highlight re-runs so we only fetch once per session.
+   */
+  let tcmndItemPrices = {};
+
+  async function fetchAndCacheItemPrices(apiKey, idToName) {
+    const itemIds = Object.keys(idToName);
+    if (!itemIds.length || !apiKey) return;
+
+    try {
+      const url = API_V2_BASE + 'torn/items?ids=' + itemIds.join(',') + '&key=' + apiKey;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+      }
+      const data = await response.json();
+
+      if (!data || data.error) {
+        console.error(LOG_TAG, 'Item prices API error:', data ? data.error : 'null');
+        return;
+      }
+
+      // v2 may return { items: [{...}] } or { items: {"186": {...}} }
+      const rawItems = data.items || data;
+      const itemArr = Array.isArray(rawItems) ? rawItems : Object.values(rawItems);
+
+      itemArr.forEach(function (item) {
+        if (!item) return;
+        const itemId = String(item.id || item.ID || '');
+        const name = idToName[itemId];
+        if (!name) return;
+        const price = item.market_value || item.sell_price || item.value || 0;
+        if (price > 0) {
+          tcmndItemPrices[name] = Math.round(Number(price));
+        }
+      });
+
+      console.log(LOG_TAG, 'Item prices cached:', Object.keys(tcmndItemPrices).length, 'items');
+    } catch (err) {
+      console.error(LOG_TAG, 'fetchAndCacheItemPrices failed:', err);
+    }
+  }
+
+  function formatItemPrice(n) {
+    return '$' + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
   /* =========================================================
@@ -851,9 +917,10 @@
       document.querySelectorAll('.' + cls).forEach(function (el) {
         el.classList.remove(cls);
         el.style.removeProperty('padding-bottom');
+        el.removeAttribute('data-tcmnd-price');
       });
     });
-    document.querySelectorAll('.tcmnd-country, .tcmnd-badge').forEach(function (el) {
+    document.querySelectorAll('.tcmnd-country, .tcmnd-badge, .tcmnd-price-tip').forEach(function (el) {
       el.remove();
     });
     // Restore ancestor overflow values that were changed for clipping prevention
@@ -913,6 +980,12 @@
       container.style.setProperty('padding-bottom', '18px', 'important');
       // Fix parent overflow so the outline and country label aren't clipped
       makeAncestorsOverflowVisible(container);
+
+      // Attach price for hover tooltip (data attribute — no per-element listener needed)
+      const itemPrice = tcmndItemPrices[assignment.name];
+      if (itemPrice) {
+        container.setAttribute('data-tcmnd-price', String(itemPrice));
+      }
 
       const badge = document.createElement('span');
       badge.className = 'tcmnd-badge tcmnd-badge-' + TIER_CSS[assignment.colorIndex];
@@ -1427,8 +1500,9 @@
       // Update museum day countdown (non-blocking — errors are swallowed internally)
       updateMuseumDayCountdown(apiKey);
 
-      // Build ID→name map (diagnostic)
-      buildIdToNameMapFromDOM();
+      // Build ID→name map (diagnostic) and fetch buy prices for hover tooltips
+      const idToName = buildIdToNameMapFromDOM();
+      fetchAndCacheItemPrices(apiKey, idToName); // non-blocking — prices populate async
 
       // Clear BEFORE reading DOM counts so old badge numbers don't pollute the read
       clearHighlights();
@@ -1529,6 +1603,37 @@
   }
 
   /* =========================================================
+   * PRICE TOOLTIP — delegated listener (runs once at init)
+   * =========================================================
+   *
+   * Containers with a current buy price have data-tcmnd-price set.
+   * A single mouseover/mouseout on document.body handles all of them
+   * without needing per-container event listeners.
+   */
+
+  function initPriceTooltip() {
+    document.body.addEventListener('mouseover', function (evt) {
+      const container = evt.target.closest ? evt.target.closest('[data-tcmnd-price]') : null;
+      if (!container || container.querySelector('.tcmnd-price-tip')) return;
+      const price = container.getAttribute('data-tcmnd-price');
+      if (!price || price === '0') return;
+      const tip = document.createElement('div');
+      tip.className = 'tcmnd-price-tip';
+      tip.textContent = formatItemPrice(Number(price));
+      container.appendChild(tip);
+    });
+
+    document.body.addEventListener('mouseout', function (evt) {
+      const container = evt.target.closest ? evt.target.closest('[data-tcmnd-price]') : null;
+      if (!container) return;
+      // Only remove the tip when the cursor has truly left the container
+      if (evt.relatedTarget && container.contains(evt.relatedTarget)) return;
+      const tip = container.querySelector('.tcmnd-price-tip');
+      if (tip) tip.remove();
+    });
+  }
+
+  /* =========================================================
    * PAGE INIT
    * ========================================================= */
 
@@ -1561,6 +1666,7 @@
   }
 
   function init() {
+    initPriceTooltip();
     waitForContent(hasMuseumContent, function () {
       injectCog();
       runMuseumHighlights();
