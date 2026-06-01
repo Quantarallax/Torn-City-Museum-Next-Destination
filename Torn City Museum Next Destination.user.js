@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.26
+// @version      1.0.27
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.26';
+  const VERSION = '1.0.27';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -962,7 +962,19 @@
             for (let up = 0; up < 8; up++) {
               if (!anc || anc === document.body) break;
               if (BLOCK_TAGS[anc.tagName.toLowerCase()]) {
-                map[name] = anc;
+                const cImgCount = anc.querySelectorAll(ITEM_IMG_SELECTOR).length;
+                if (cImgCount === 1) {
+                  // Ideal: single-item container with an image
+                  map[name] = anc;
+                } else if (cImgCount === 0) {
+                  // No image — only use if the container text is short (item card, not a list)
+                  // Reject section headers, which include all item names in a long paragraph
+                  const cTextLen = anc.textContent.trim().length;
+                  if (cTextLen <= name.length * 8) {
+                    map[name] = anc;
+                  }
+                }
+                // Always stop at the first block ancestor (going higher = broader = worse)
                 break;
               }
               anc = anc.parentElement;
@@ -1045,6 +1057,15 @@
 
       if (container.tagName === 'IMG' || container.tagName === 'INPUT') {
         container = container.parentElement || container;
+      }
+
+      // Safety guard: skip containers that span multiple item images — these are
+      // section headers or wrappers, not individual item cards.
+      const containerImgCount = container.querySelectorAll(ITEM_IMG_SELECTOR).length;
+      if (containerImgCount > 1) {
+        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" spans ' + String(containerImgCount) +
+          ' images (too broad) — skipping highlight.');
+        return;
       }
 
       container.classList.add(HL_CLASSES[assignment.colorIndex]);
