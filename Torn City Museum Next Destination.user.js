@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.42
+// @version      1.0.43
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.42';
+  const VERSION = '1.0.43';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -518,8 +518,9 @@
    * For Artifact: ALL items are stored by their raw API name so the generic section
    *   handler can show correct country labels and prices without hardcoded lists.
    *
-   * Price source: item.value.buy_price, falling back to item.value.market_price when
-   * buy_price is null (common for Artifact items sourced from the Black Market).
+   * Price source: item.value.buy_price only. We do NOT fall back to market_price —
+   * that is the player-to-player Torn City market price, not a "buy abroad" price.
+   * Items with no buy_price (null) have no foreign vendor and show no hover price.
    * The v2 API returns "value" as an object:
    *   { vendor: { country, name }, buy_price, sell_price, market_price }
    */
@@ -575,29 +576,29 @@
 
           /*
            * The "value" field is an object: { vendor, buy_price, sell_price, market_price }
-           * buy_price — the foreign shop purchase price (null for Black Market items).
-           * Fall back to market_price when buy_price is absent/null.
+           * buy_price — the foreign shop purchase price (null for city-find / black-market items).
+           * We intentionally do NOT fall back to market_price here: that is the Torn City
+           * player-trading price, not a "buy abroad" price. If buy_price is null, no hover
+           * price should be shown (the item has no vendor shop).
            */
           let price = 0;
-          if (item.value && typeof item.value === 'object') {
-            price = item.value.buy_price || item.value.market_price || 0;
-          } else if (typeof item.value === 'number') {
-            price = item.value;
-          }
-          if (!price) {
-            price = item.market_value || item.buy_price || item.sell_price || item.cost || 0;
+          const itemBuyPrice = (item.value && typeof item.value === 'object') ? item.value.buy_price : null;
+          if (itemBuyPrice) {
+            price = Math.round(Number(itemBuyPrice));
           }
 
           if (price > 0) {
-            tcmndItemPrices[storeName] = Math.round(Number(price));
+            tcmndItemPrices[storeName] = price;
           }
 
-          // Extract vendor country for dynamic country labels (used by generic section handler)
-          if (item.value && typeof item.value === 'object' &&
-              item.value.vendor && item.value.vendor.country) {
-            tcmndItemCountries[storeName] = item.value.vendor.country;
-          } else if (item.is_found_in_city) {
-            // No vendor country — item is found within the city
+          // Country label — prefer the vendor country; fall back to "City Find" for
+          // items with no vendor shop (buy_price null means no foreign store to buy from).
+          const itemVendorCountry = (item.value && typeof item.value === 'object' && item.value.vendor)
+            ? item.value.vendor.country
+            : null;
+          if (itemVendorCountry) {
+            tcmndItemCountries[storeName] = itemVendorCountry;
+          } else if (item.is_found_in_city || !itemBuyPrice) {
             tcmndItemCountries[storeName] = 'City Find';
           }
         });
@@ -1161,6 +1162,16 @@
       if (containerImgCount > 1) {
         console.warn(LOG_TAG, 'Container for "' + assignment.name + '" spans ' + String(containerImgCount) +
           ' images (too broad) — skipping highlight.');
+        return;
+      }
+
+      // Safety guard: skip containers that are wider than a typical item card.
+      // A rendered width > 300px usually means an inline item-detail panel has opened
+      // (which happens for artifact sets but not plushies/flowers). Item cards are ≤ ~150px.
+      const containerWidth = container.getBoundingClientRect().width;
+      if (containerWidth > 300) {
+        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" width=' +
+          Math.round(containerWidth) + 'px (detail panel open?) — skipping highlight.');
         return;
       }
 
@@ -1934,6 +1945,7 @@
         }
         const bCT = bCN.textContent.trim();
         if (bCT.length >= 3 && bCT.length <= 50 &&
+            /^[A-Z]/.test(bCT) &&
             !/^[\d,.\s]+$/.test(bCT) &&
             !/^(exchange|you\b|require|number\s|set\b|sets\b|\$|price)/i.test(bCT) &&
             !knownLower[bCT.toLowerCase()]) {
@@ -1968,7 +1980,16 @@
           if (!bCont) bCont = bImg.parentElement;
 
           if (bName && !itemMap[bName]) {
-            const bDomCnt = extractDomCount(bCont, bName);
+            // Try to find the inventory count in the image's container.
+            // If the image cell contains only the img (no count badge inside),
+            // also check the parent cell — the count badge may sit in a sibling element.
+            let bDomCnt = extractDomCount(bCont, bName);
+            if (bDomCnt === null && bCont.parentElement && bCont.parentElement !== sectionContainer) {
+              const bParentImgCnt = bCont.parentElement.querySelectorAll(ITEM_IMG_SELECTOR).length;
+              if (bParentImgCnt === 1) {
+                bDomCnt = extractDomCount(bCont.parentElement, bName);
+              }
+            }
             itemMap[bName] = {
               containerEl: bCont,
               domCount: bDomCnt !== null ? bDomCnt : 0
