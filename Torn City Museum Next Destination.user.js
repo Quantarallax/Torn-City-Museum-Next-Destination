@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.30
+// @version      1.0.31
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.30';
+  const VERSION = '1.0.31';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1656,15 +1656,15 @@
       totalApplied += applyHighlightsForSection(counts, plushieMap, PLUSHIE_NAMES);
       totalApplied += applyHighlightsForSection(counts, flowerMap, FLOWER_NAMES);
 
+      // Generic handler for non-plushie/flower exchange sets (Arrowhead etc.)
+      // Scopes its image queries to the active section — does not touch plushie/flower.
+      totalApplied += runGenericExchangeSection(displayData);
+
       if (totalApplied === 0) {
         console.warn(LOG_TAG, 'No highlights applied. DOM structure:');
         logDomStructure();
-        // May be on a new set tab — scan for unknown items
-        scanAndLogNewSections();
       } else {
         console.log(LOG_TAG, 'Total highlights: ' + String(totalApplied));
-        // Also check if any new-set items exist alongside the known ones
-        scanAndLogNewSections();
       }
     } finally {
       tcmndRunning = false;
@@ -1672,83 +1672,178 @@
   }
 
   /* =========================================================
-   * NEW SET DISCOVERY
+   * GENERIC EXCHANGE SECTION HANDLER
    * =========================================================
    *
-   * When the user switches to an Arrowhead / Medieval Coin / Companion /
-   * Senet tab, scan the visible item images, extract each
-   * item name and its stock count, and log them. This lets us confirm
-   * detection works and fills in the item names needed for future
-   * full highlighting support.
+   * Handles non-plushie / non-flower exchange tabs (Arrowhead,
+   * Medieval Coin, Companion, Senet, and any future sets).
    *
-   * Items already in ALL_ITEM_NAMES (plushies / flowers) are skipped.
+   * Unlike the plushie/flower path — which searches the whole
+   * document for known item names — this function:
+   *
+   *   1. Finds the exchange section header by a flexible regex
+   *      (so it works regardless of the exact header wording).
+   *
+   *   2. Locates the SMALLEST ancestor of that header that also
+   *      contains item images, and uses that as the section
+   *      container.  All subsequent image queries are scoped to
+   *      this container, preventing plushie/flower images that
+   *      may still be present elsewhere in the DOM from polluting
+   *      the name-extraction or imgCount checks.
+   *
+   *   3. For each image inside the container, walks up to find
+   *      the single-image sub-container and extracts the item
+   *      name from its text.
+   *
+   *   4. Applies the standard red/yellow/green highlights (using
+   *      DOM counts + display-cabinet counts) via the shared
+   *      applyHighlightsForSection function.
+   *
+   * Country labels and hover prices are shown where the item
+   * name matches an entry in ITEM_COUNTRIES / tcmndItemPrices
+   * (currently only plushies/flowers have that data; new sets
+   * will show "Unknown" until their data is added).
    */
 
-  function scanAndLogNewSections() {
-    // Only run if we're on a new section tab (not plushie or flower)
-    const onPlushie = !!findElementByText(PLUSHIE_SECTION_TEXT);
-    const onFlower = !!findElementByText(FLOWER_SECTION_TEXT);
-    if (onPlushie || onFlower) return; // handled by main highlight logic
+  function runGenericExchangeSection(displayData) {
+    // Skip — plushie and flower pages are handled by their own path
+    if (findElementByText(PLUSHIE_SECTION_TEXT) || findElementByText(FLOWER_SECTION_TEXT)) {
+      return 0;
+    }
 
-    let activeSection = 'unknown';
-    for (let si = 0; si < NEW_SECTION_TEXTS.length; si++) {
-      if (findElementByText(NEW_SECTION_TEXTS[si])) {
-        activeSection = NEW_SECTION_TEXTS[si].replace('To exchange ', '').replace(' for 10 points', '');
+    // Find the active exchange section header by flexible pattern
+    const EXCHANGE_RE = /exchange\s+.+?\s+for\s+\d+\s+points/i;
+    let sectionHeaderEl = null;
+    let sectionLabel = 'Unknown Set';
+
+    const twalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    let tnode = twalker.nextNode();
+    while (tnode) {
+      const ttext = tnode.textContent.trim();
+      if (EXCHANGE_RE.test(ttext) &&
+          ttext.toLowerCase().indexOf('plushie') === -1 &&
+          ttext.toLowerCase().indexOf('exotic flower') === -1) {
+        sectionHeaderEl = tnode.parentElement;
+        const mLabel = ttext.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
+        if (mLabel) sectionLabel = mLabel[1].trim();
         break;
       }
+      tnode = twalker.nextNode();
     }
 
-    const imgs = document.querySelectorAll(ITEM_IMG_SELECTOR);
-    if (imgs.length === 0) return;
+    if (!sectionHeaderEl) return 0;
 
-    const discovered = [];
+    // Walk up to the smallest ancestor of the header that also holds item images
+    let sectionContainer = sectionHeaderEl;
+    let foundContainer = null;
+    for (let up = 0; up < 15; up++) {
+      if (!sectionContainer || sectionContainer === document.body) break;
+      if (sectionContainer.querySelectorAll(ITEM_IMG_SELECTOR).length >= 1) {
+        foundContainer = sectionContainer;
+        break;
+      }
+      sectionContainer = sectionContainer.parentElement;
+    }
+
+    if (!foundContainer) {
+      console.log(LOG_TAG, '"' + sectionLabel + '" section header found but no item images in its ancestor chain.');
+      return 0;
+    }
+    sectionContainer = foundContainer;
+
+    // All image queries are now scoped to sectionContainer — no cross-section pollution
+    const sectionImgs = sectionContainer.querySelectorAll(ITEM_IMG_SELECTOR);
+    console.log(LOG_TAG, '"' + sectionLabel + '" — ' + String(sectionImgs.length) + ' image(s) in section container.');
+
+    if (sectionImgs.length === 0) return 0;
+
+    // Build item map: itemName → { containerEl, domCount }
+    const itemMap = {};
     const knownLower = {};
-    for (let n = 0; n < ALL_ITEM_NAMES.length; n++) {
-      knownLower[ALL_ITEM_NAMES[n].toLowerCase()] = true;
+    for (let kn = 0; kn < ALL_ITEM_NAMES.length; kn++) {
+      knownLower[ALL_ITEM_NAMES[kn].toLowerCase()] = true;
     }
 
-    for (let i = 0; i < imgs.length; i++) {
-      const img = imgs[i];
+    for (let i = 0; i < sectionImgs.length; i++) {
+      const img = sectionImgs[i];
       let container = img.parentElement;
-      let name = null;
-      let count = null;
 
       for (let up = 0; up < 10; up++) {
-        if (!container || container === document.body) break;
+        if (!container || container === sectionContainer || container === document.body) break;
+        // Count images only within this sub-container (auto-scoped since container < sectionContainer)
         const imgCount = container.querySelectorAll(ITEM_IMG_SELECTOR).length;
         if (imgCount === 1) {
-          // Extract item name: first non-numeric, non-empty text node
-          const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
-          let tn = walker.nextNode();
-          while (tn) {
-            const t = tn.textContent.trim();
-            if (t && t.length >= 3 && t.length <= 60 && !/^\d+$/.test(t.replace(/,/g, ''))) {
-              if (!knownLower[t.toLowerCase()]) {
-                name = t;
-              }
-              break;
-            }
-            tn = walker.nextNode();
-          }
-          if (name) {
-            count = extractDomCount(container, name);
+          const itemName = extractGenericItemName(container, knownLower);
+          if (itemName && !itemMap[itemName]) {
+            const domCount = extractDomCount(container, itemName);
+            itemMap[itemName] = {
+              containerEl: container,
+              domCount: domCount !== null ? domCount : 0
+            };
           }
           break;
         }
         container = container.parentElement;
       }
+    }
 
-      if (name) {
-        discovered.push(name + '=' + String(count !== null ? count : '?'));
+    const discoveredNames = Object.keys(itemMap);
+    if (discoveredNames.length === 0) {
+      console.log(LOG_TAG, '"' + sectionLabel + '" — item names could not be extracted from image containers.');
+      return 0;
+    }
+
+    console.log(LOG_TAG, '"' + sectionLabel + '" — items: ' + discoveredNames.map(function (n) {
+      return n + '(x' + String(itemMap[n].domCount) + ')';
+    }).join(', '));
+
+    // Build total counts: DOM + display cabinet
+    const counts = {};
+    for (let i = 0; i < discoveredNames.length; i++) {
+      counts[discoveredNames[i]] = itemMap[discoveredNames[i]].domCount;
+    }
+    if (displayData && displayData.display) {
+      Object.keys(displayData.display).forEach(function (key) {
+        const dItem = displayData.display[key];
+        if (!dItem || !dItem.name) return;
+        const nn = dItem.name;
+        if (typeof counts[nn] === 'number') {
+          counts[nn] += (dItem.quantity || 0);
+        }
+      });
+    }
+
+    // Build container map and apply highlights
+    const containerMap = {};
+    for (let i = 0; i < discoveredNames.length; i++) {
+      containerMap[discoveredNames[i]] = itemMap[discoveredNames[i]].containerEl;
+    }
+
+    const applied = applyHighlightsForSection(counts, containerMap, discoveredNames);
+    if (applied > 0) {
+      console.log(LOG_TAG, '"' + sectionLabel + '" — ' + String(applied) + ' highlight(s) applied.');
+    }
+    return applied;
+  }
+
+  /**
+   * Extracts an item name from a single-item container's text nodes.
+   * Rejects numeric strings, short UI labels, and known plushie/flower names.
+   */
+  function extractGenericItemName(containerEl, knownLower) {
+    const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT, null, false);
+    let node = walker.nextNode();
+    while (node) {
+      const t = node.textContent.trim();
+      if (t.length >= 2 && t.length <= 60 &&
+          !/^[\d,.\s]+$/.test(t) &&
+          !/^(exchange|points?|number of sets?|sets?|\$|price)/i.test(t) &&
+          !knownLower[t.toLowerCase()]) {
+        return t;
       }
+      node = walker.nextNode();
     }
-
-    if (discovered.length > 0) {
-      console.log(LOG_TAG, 'New section "' + activeSection + '" — items discovered:', discovered.join(', '));
-      console.log(LOG_TAG, 'Add these to the item list for full highlight support.');
-    } else {
-      console.log(LOG_TAG, 'New section "' + activeSection + '" — no items extracted (all may be in known lists).');
-    }
+    return null;
   }
 
   /* =========================================================
