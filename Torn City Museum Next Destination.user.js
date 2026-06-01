@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.38
+// @version      1.0.39
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.38';
+  const VERSION = '1.0.39';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1791,7 +1791,7 @@
           console.log(LOG_TAG, '[Generic] Exchange element: "' + et.substring(0, 60) + '" len=' + String(et.length) + ' visible=' + String(vis));
           if (vis) {
             sectionHeaderEl = enode;
-            const mLabel = et.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
+            const mLabel = et.match(/exchange\s+(?:a|an)\s+(.+?)\s+for\s+[\d,]+\s+points/i);
             if (mLabel) sectionLabel = mLabel[1].trim();
             console.log(LOG_TAG, '[Generic] Selected artifact section: "' + sectionLabel + '"');
             break;
@@ -1861,9 +1861,99 @@
       }
     }
 
+    if (Object.keys(itemMap).length === 0) {
+      // ── Strategy B: text-first index pairing ─────────────────────────────────
+      // Runs when Strategy A (image-first) found 0 items. Handles DOM layouts where
+      // item names are siblings of the image cells (e.g. a CSS grid row above the
+      // image row) rather than ancestors, so walking up from the image never reaches
+      // the name text node.
+      //
+      // The approach:
+      //  1. Find the exchange paragraph (most specific EXCHANGE_RE element in the
+      //     section, ≤ 100 chars). Skipping text inside it avoids false matches from
+      //     bold fragments like "Arrowhead set" or "25 points".
+      //  2. Collect all other candidate text nodes (item names) in document order.
+      //  3. If count matches image count: pair name[i] with sectionImgs[i].
+      //  4. For each pair use the image's closest single-image container.
+      console.log(LOG_TAG, '"' + sectionLabel + '" — Strategy A: 0 items; trying Strategy B (index pairing).');
+
+      // Step B1 — find the exchange paragraph
+      let bPara = null;
+      const bPW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
+      let bPN = bPW.nextNode();
+      while (bPN) {
+        const bPT = bPN.textContent.trim();
+        if (bPT.length >= 20 && bPT.length <= 100 && EXCHANGE_RE.test(bPT)) {
+          bPara = bPN; // keep last (deepest) match
+        }
+        bPN = bPW.nextNode();
+      }
+      console.log(LOG_TAG, '"' + sectionLabel + '" — B exchange para: ' +
+        (bPara ? '<' + bPara.tagName + '> len=' + String(bPara.textContent.trim().length) : 'not found'));
+
+      // Step B2 — collect candidate item names
+      const bCands = [];
+      const bCW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_TEXT, null, false);
+      let bCN = bCW.nextNode();
+      while (bCN) {
+        if (bPara && bPara.contains(bCN.parentElement)) {
+          bCN = bCW.nextNode();
+          continue; // skip bold exchange-header fragments
+        }
+        const bCT = bCN.textContent.trim();
+        if (bCT.length >= 3 && bCT.length <= 50 &&
+            !/^[\d,.\s]+$/.test(bCT) &&
+            !/^(exchange|you\b|require|number\s|set\b|sets\b|\$|price)/i.test(bCT) &&
+            !knownLower[bCT.toLowerCase()]) {
+          bCands.push(bCT);
+        }
+        bCN = bCW.nextNode();
+      }
+      console.log(LOG_TAG, '"' + sectionLabel + '" — B candidates: ' + JSON.stringify(bCands) +
+        ' | images: ' + String(sectionImgs.length));
+
+      // Step B3 — pair candidates with images by index
+      if (bCands.length > 0 && bCands.length === sectionImgs.length) {
+        for (let bIdx = 0; bIdx < sectionImgs.length; bIdx++) {
+          const bName = bCands[bIdx];
+          const bImg = sectionImgs[bIdx];
+
+          // Find the closest single-image container, falling back to img.parentElement
+          let bCont = bImg.parentElement;
+          for (let bUp = 0; bUp < 8; bUp++) {
+            if (!bCont || bCont === sectionContainer || bCont === document.body) {
+              bCont = bImg.parentElement;
+              break;
+            }
+            const bImgCnt = bCont.querySelectorAll(ITEM_IMG_SELECTOR).length;
+            if (bImgCnt === 1) break;
+            if (bImgCnt > 1) {
+              bCont = bImg.parentElement;
+              break;
+            }
+            bCont = bCont.parentElement;
+          }
+          if (!bCont) bCont = bImg.parentElement;
+
+          if (bName && !itemMap[bName]) {
+            const bDomCnt = extractDomCount(bCont, bName);
+            itemMap[bName] = {
+              containerEl: bCont,
+              domCount: bDomCnt !== null ? bDomCnt : 0
+            };
+            console.log(LOG_TAG, '"' + sectionLabel + '" B[' + String(bIdx) + ']: "' + bName +
+              '" → <' + bCont.tagName + '> cnt=' + String(bDomCnt));
+          }
+        }
+      } else {
+        console.log(LOG_TAG, '"' + sectionLabel + '" — B candidate count (' + String(bCands.length) +
+          ') ≠ image count (' + String(sectionImgs.length) + '); pairing skipped.');
+      }
+    }
+
     const discoveredNames = Object.keys(itemMap);
     if (discoveredNames.length === 0) {
-      console.log(LOG_TAG, '"' + sectionLabel + '" — item names could not be extracted from image containers.');
+      console.log(LOG_TAG, '"' + sectionLabel + '" — item names could not be extracted (both strategies failed).');
       return 0;
     }
 
