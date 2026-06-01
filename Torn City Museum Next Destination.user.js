@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.37
+// @version      1.0.38
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.37';
+  const VERSION = '1.0.38';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -626,13 +626,25 @@
 
   function findElementByText(searchText) {
     const lc = searchText.toLowerCase();
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-    let node = walker.nextNode();
-    while (node) {
-      if (node.textContent.toLowerCase().includes(lc)) {
-        return node.parentElement;
+    // Fast path: check individual text nodes (works when text is plain / unformatted)
+    const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+    let tn = textWalker.nextNode();
+    while (tn) {
+      if (tn.textContent.toLowerCase().includes(lc)) {
+        return tn.parentElement;
       }
-      node = walker.nextNode();
+      tn = textWalker.nextNode();
+    }
+    // Fallback: check element.textContent for text fragmented by inline formatting
+    // (e.g. "To exchange an <b>Arrowhead set</b> for <b>25 points</b>..." splits
+    //  the string across multiple text nodes so SHOW_TEXT walker misses it)
+    const elemWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null, false);
+    let en = elemWalker.nextNode();
+    while (en) {
+      if (en.textContent.toLowerCase().includes(lc)) {
+        return en;
+      }
+      en = elemWalker.nextNode();
     }
     return null;
   }
@@ -1760,36 +1772,34 @@
     console.log(LOG_TAG, '[Generic] Plushie section: found=' + String(!!plushieEl) + ' visible=' + String(plushieVis));
     console.log(LOG_TAG, '[Generic] Flower section:  found=' + String(!!flowerEl) + ' visible=' + String(flowerVis));
 
-    // POSITIVE DETECTION: scan for a visible non-plushie/flower exchange section.
-    // We no longer bail based on plushie/flower visibility — that approach failed
-    // when Torn keeps both panels simultaneously rendered (no display:none on inactive
-    // panel). Instead we look for the FIRST VISIBLE artifact exchange header.
+    // ELEMENT walker — searches element.textContent so that exchange text fragmented
+    // by <b> tags (e.g. "for <b>25 points</b>") is matched as a whole string.
+    // Length guard (20–300 chars) prevents matching huge ancestor containers.
     const EXCHANGE_RE = /exchange\s+.+?\s+for\s+[\d,]+\s+points/i;
     let sectionHeaderEl = null;
     let sectionLabel = 'Unknown Set';
 
-    const twalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-    let tnode = twalker.nextNode();
-    while (tnode) {
-      const ttext = tnode.textContent.trim();
-      if (EXCHANGE_RE.test(ttext)) {
-        const hasPlushie = ttext.toLowerCase().indexOf('plushie') !== -1;
-        const hasFlower = ttext.toLowerCase().indexOf('exotic flower') !== -1;
-        const candidate = tnode.parentElement;
-        const vis = isElementVisible(candidate);
-        console.log(LOG_TAG, '[Generic] Exchange text: "' + ttext.substring(0, 55) + '" — plushie=' + String(hasPlushie) + ' flower=' + String(hasFlower) + ' visible=' + String(vis));
+    const ewalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null, false);
+    let enode = ewalker.nextNode();
+    while (enode) {
+      const et = enode.textContent.trim();
+      if (et.length >= 20 && et.length <= 300 && EXCHANGE_RE.test(et)) {
+        const hasPlushie = et.toLowerCase().indexOf('plushie') !== -1;
+        const hasFlower = et.toLowerCase().indexOf('exotic flower') !== -1;
         if (!hasPlushie && !hasFlower) {
+          const vis = isElementVisible(enode);
+          console.log(LOG_TAG, '[Generic] Exchange element: "' + et.substring(0, 60) + '" len=' + String(et.length) + ' visible=' + String(vis));
           if (vis) {
-            sectionHeaderEl = candidate;
-            const mLabel = ttext.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
+            sectionHeaderEl = enode;
+            const mLabel = et.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
             if (mLabel) sectionLabel = mLabel[1].trim();
             console.log(LOG_TAG, '[Generic] Selected artifact section: "' + sectionLabel + '"');
             break;
           }
-          console.log(LOG_TAG, '[Generic] Artifact section header found but not visible — continuing search.');
+          console.log(LOG_TAG, '[Generic] Artifact header not visible — continuing search.');
         }
       }
-      tnode = twalker.nextNode();
+      enode = ewalker.nextNode();
     }
 
     if (!sectionHeaderEl) {
