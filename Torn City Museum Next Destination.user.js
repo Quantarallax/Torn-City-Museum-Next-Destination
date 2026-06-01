@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.39
+// @version      1.0.42
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.39';
+  const VERSION = '1.0.42';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -152,8 +152,9 @@
     .tcmnd-country {
       position: absolute;
       bottom: 0;
-      left: 0;
-      right: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 100%;
       text-align: center;
       font-size: 10px;
       font-weight: 700;
@@ -163,6 +164,7 @@
       line-height: 1.2;
       pointer-events: none;
       background: rgba(13, 13, 22, 0.88);
+      z-index: 20;
     }
     .tcmnd-country-red { color: ${COL_RED}; border-top: 1px solid ${COL_RED}; }
     .tcmnd-country-yellow { color: #c9a300; border-top: 1px solid #c9a300; }
@@ -594,6 +596,9 @@
           if (item.value && typeof item.value === 'object' &&
               item.value.vendor && item.value.vendor.country) {
             tcmndItemCountries[storeName] = item.value.vendor.country;
+          } else if (item.is_found_in_city) {
+            // No vendor country — item is found within the city
+            tcmndItemCountries[storeName] = 'City Find';
           }
         });
       } catch (err) {
@@ -746,6 +751,16 @@
         }
       }
 
+      // Also accept common count-badge formats: "×1", "x1", "1×" etc.
+      // Only attempt on short strings (≤ 6 chars) to avoid false positives.
+      if (cleaned.length <= 6) {
+        const stripped = cleaned.replace(/^[×xX*\s]+|[×xX*\s]+$/g, '');
+        if (/^\d+$/.test(stripped) && stripped.length >= 1 && stripped.length <= 5) {
+          const badgeNum = parseInt(stripped, 10);
+          if (badgeNum >= 0) return badgeNum;
+        }
+      }
+
       node = walker.nextNode();
     }
 
@@ -880,6 +895,29 @@
    */
 
   function getHighlightAssignments(counts, sectionNames) {
+    // Special case: single-item set → always green
+    if (sectionNames.length === 1) {
+      return [{ name: sectionNames[0], count: counts[sectionNames[0]] || 0, colorIndex: 2 }];
+    }
+
+    // Special case: two-item set → lower is red, higher is yellow
+    if (sectionNames.length === 2) {
+      const twoA = sectionNames[0];
+      const twoB = sectionNames[1];
+      const twoCA = counts[twoA] || 0;
+      const twoCB = counts[twoB] || 0;
+      if (twoCA <= twoCB) {
+        return [
+          { name: twoA, count: twoCA, colorIndex: 0 },
+          { name: twoB, count: twoCB, colorIndex: 1 }
+        ];
+      }
+      return [
+        { name: twoB, count: twoCB, colorIndex: 0 },
+        { name: twoA, count: twoCA, colorIndex: 1 }
+      ];
+    }
+
     const zeros = [];
     const nonZeros = [];
 
@@ -1081,7 +1119,7 @@
    */
   function makeAncestorsOverflowVisible(el) {
     let parent = el.parentElement;
-    for (let d = 0; d < 4 && parent && parent !== document.body; d++) {
+    for (let d = 0; d < 8 && parent && parent !== document.body; d++) {
       const ov = window.getComputedStyle(parent).overflow;
       const ofy = window.getComputedStyle(parent).overflowY;
       if (ov === 'hidden' || ofy === 'hidden') {
@@ -1861,21 +1899,15 @@
       }
     }
 
-    if (Object.keys(itemMap).length === 0) {
+    if (Object.keys(itemMap).length < sectionImgs.length) {
       // ── Strategy B: text-first index pairing ─────────────────────────────────
-      // Runs when Strategy A (image-first) found 0 items. Handles DOM layouts where
-      // item names are siblings of the image cells (e.g. a CSS grid row above the
-      // image row) rather than ancestors, so walking up from the image never reaches
-      // the name text node.
-      //
-      // The approach:
-      //  1. Find the exchange paragraph (most specific EXCHANGE_RE element in the
-      //     section, ≤ 100 chars). Skipping text inside it avoids false matches from
-      //     bold fragments like "Arrowhead set" or "25 points".
-      //  2. Collect all other candidate text nodes (item names) in document order.
-      //  3. If count matches image count: pair name[i] with sectionImgs[i].
-      //  4. For each pair use the image's closest single-image container.
-      console.log(LOG_TAG, '"' + sectionLabel + '" — Strategy A: 0 items; trying Strategy B (index pairing).');
+      // Runs when Strategy A (image-first) found fewer items than images. Handles
+      // DOM layouts where item names are siblings of the image cells (e.g. a CSS
+      // grid row above the image row) rather than ancestors, so walking up from
+      // the image never reaches the name text node. Also fills gaps when A finds
+      // some but not all items (e.g. the last item in a row has a different DOM
+      // structure from the rest).
+      console.log(LOG_TAG, '"' + sectionLabel + '" — Strategy A: ' + String(Object.keys(itemMap).length) + '/' + String(sectionImgs.length) + ' items; running Strategy B for missing items.');
 
       // Step B1 — find the exchange paragraph
       let bPara = null;
@@ -2025,16 +2057,25 @@
    */
 
   function startItemObserver() {
+    // Detects which exchange section tab is currently visible by finding the first
+    // element whose textContent matches the exchange pattern AND is visible on screen.
+    // This changes on every tab switch — even between two artifact tabs with the same
+    // image count — because each tab has a different exchange header text.
     function readPageState() {
       const imgCount = document.querySelectorAll(ITEM_IMG_SELECTOR).length;
-      const hasPlushie = !!findElementByText(PLUSHIE_SECTION_TEXT);
-      const hasFlower = !!findElementByText(FLOWER_SECTION_TEXT);
-      // Also track new sets so switching to their tabs triggers re-detection
-      let newSectionFlags = '';
-      for (let si = 0; si < NEW_SECTION_TEXTS.length; si++) {
-        newSectionFlags += (!!findElementByText(NEW_SECTION_TEXTS[si]) ? '1' : '0');
+      const EXCHANGE_RE_PS = /exchange\s+.+?\s+for\s+[\d,]+\s+points/i;
+      let activeTabSig = '';
+      const psWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null, false);
+      let psEl = psWalker.nextNode();
+      while (psEl) {
+        const psT = psEl.textContent.trim();
+        if (psT.length >= 20 && psT.length <= 300 && EXCHANGE_RE_PS.test(psT) && isElementVisible(psEl)) {
+          activeTabSig = psT.substring(0, 40).replace(/\s+/g, ' ');
+          break;
+        }
+        psEl = psWalker.nextNode();
       }
-      return String(imgCount) + '|' + String(hasPlushie) + '|' + String(hasFlower) + '|' + newSectionFlags;
+      return String(imgCount) + '|' + activeTabSig;
     }
 
     let lastState = readPageState();
