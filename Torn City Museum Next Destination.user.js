@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.32
+// @version      1.0.33
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.32';
+  const VERSION = '1.0.33';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -58,10 +58,10 @@
    * scanner in runMuseumHighlights will log discovered items when these
    * tabs are visited for the first time).
    */
-  const ARROWHEAD_SECTION_TEXT = 'To exchange an Arrowhead set for 10 points';
-  const MEDIEVAL_COIN_SECTION_TEXT = 'To exchange a Medieval Coin set for 10 points';
-  const COMPANION_SECTION_TEXT = 'To exchange a Companion set for 10 points';
-  const SENET_SECTION_TEXT = 'To exchange a Senet Game set for 10 points';
+  const ARROWHEAD_SECTION_TEXT = 'To exchange an Arrowhead set for 25 points';
+  const MEDIEVAL_COIN_SECTION_TEXT = 'To exchange a Medieval coin set for 100 points';
+  const COMPANION_SECTION_TEXT = 'To exchange a Companion Scripts set for 1,000 points';
+  const SENET_SECTION_TEXT = 'To exchange a Senet game set for 2,000 points';
 
   const NEW_SECTION_TEXTS = [
     ARROWHEAD_SECTION_TEXT,
@@ -1737,7 +1737,7 @@
     }
 
     // Find the active exchange section header by flexible pattern
-    const EXCHANGE_RE = /exchange\s+.+?\s+for\s+\d+\s+points/i;
+    const EXCHANGE_RE = /exchange\s+.+?\s+for\s+[\d,]+\s+points/i;
     let sectionHeaderEl = null;
     let sectionLabel = 'Unknown Set';
 
