@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.28
+// @version      1.0.27
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.28';
+  const VERSION = '1.0.27';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1059,24 +1059,12 @@
         container = container.parentElement || container;
       }
 
-      // Safety guard: reject containers that are section wrappers or list elements.
-      // A section header's textContent includes all item names in the set; an item
-      // card's textContent contains only the one item name (and its stock count).
-      // Counting how many distinct known item names appear in the container is
-      // layout-independent and catches headers regardless of whether they contain
-      // images directly (imgCount check alone is insufficient — headers often have
-      // imgCount = 0 because their images live in sibling rows, not inside them).
-      let sharedNamesInContainer = 0;
-      const cTextLower = container.textContent.toLowerCase();
-      for (let nv = 0; nv < ALL_ITEM_NAMES.length; nv++) {
-        if (cTextLower.includes(ALL_ITEM_NAMES[nv].toLowerCase())) {
-          sharedNamesInContainer++;
-          if (sharedNamesInContainer >= 3) break;
-        }
-      }
-      if (sharedNamesInContainer >= 3) {
-        console.warn(LOG_TAG, '"' + assignment.name + '" mapped to broad container (' +
-          String(sharedNamesInContainer) + '+ item names found in text) — skipping highlight.');
+      // Safety guard: skip containers that span multiple item images — these are
+      // section headers or wrappers, not individual item cards.
+      const containerImgCount = container.querySelectorAll(ITEM_IMG_SELECTOR).length;
+      if (containerImgCount > 1) {
+        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" spans ' + String(containerImgCount) +
+          ' images (too broad) — skipping highlight.');
         return;
       }
 
@@ -1541,16 +1529,7 @@
     }
 
     if (nearestSec === null) {
-      if (museumDayEvents.length > 0) {
-        // Events found in the calendar but all dates are already past
-        const currentYear = new Date().getUTCFullYear();
-        console.log(LOG_TAG, 'Museum Day has finished for ' + String(currentYear) +
-          ' (' + String(museumDayEvents.length) + ' event(s) in calendar, all in the past).');
-        if (calStatusEl) calStatusEl.textContent = 'Museum Day has finished for ' + String(currentYear);
-        if (countdownEl) countdownEl.textContent = '';
-      } else {
-        setNoCalendar('no Museum Day events found in calendar response');
-      }
+      setNoCalendar(String(museumDayEvents.length) + ' Museum Day events in calendar, none in future');
       return;
     }
 
