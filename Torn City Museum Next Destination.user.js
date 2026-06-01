@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.25
+// @version      1.0.26
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.25';
+  const VERSION = '1.0.26';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -48,6 +48,23 @@
    */
   const PLUSHIE_SECTION_TEXT = 'To exchange a Plushie set for 10 points';
   const FLOWER_SECTION_TEXT = 'To exchange an Exotic flower set for 10 points';
+
+  /**
+   * New exchange set section headers (item lists are TBD — the generic
+   * scanner in runMuseumHighlights will log discovered items when these
+   * tabs are visited for the first time).
+   */
+  const ARROWHEAD_SECTION_TEXT = 'To exchange an Arrowhead set for 10 points';
+  const MEDIEVAL_COIN_SECTION_TEXT = 'To exchange a Medieval Coin set for 10 points';
+  const COMPANION_SECTION_TEXT = 'To exchange a Companion set for 10 points';
+  const SENET_SECTION_TEXT = 'To exchange a Senet Game set for 10 points';
+
+  const NEW_SECTION_TEXTS = [
+    ARROWHEAD_SECTION_TEXT,
+    MEDIEVAL_COIN_SECTION_TEXT,
+    COMPANION_SECTION_TEXT,
+    SENET_SECTION_TEXT
+  ];
 
   /** Plushie collection — 13 items. "Torn City" = obtained in-city. */
   const PLUSHIE_ITEMS = {
@@ -557,6 +574,11 @@
 
     await fetchCategoryPrices('Plushie');
     await fetchCategoryPrices('Flower');
+    // New sets — try known category names; errors are handled silently inside fetchCategoryPrices
+    await fetchCategoryPrices('Arrowhead');
+    await fetchCategoryPrices('MedievalCoin');
+    await fetchCategoryPrices('Companion');
+    await fetchCategoryPrices('Senet');
 
     const cached = Object.keys(tcmndItemPrices).length;
     console.log(LOG_TAG, 'Item prices cached:', cached, 'items');
@@ -1606,11 +1628,95 @@
       if (totalApplied === 0) {
         console.warn(LOG_TAG, 'No highlights applied. DOM structure:');
         logDomStructure();
+        // May be on a new set tab — scan for unknown items
+        scanAndLogNewSections();
       } else {
         console.log(LOG_TAG, 'Total highlights: ' + String(totalApplied));
+        // Also check if any new-set items exist alongside the known ones
+        scanAndLogNewSections();
       }
     } finally {
       tcmndRunning = false;
+    }
+  }
+
+  /* =========================================================
+   * NEW SET DISCOVERY
+   * =========================================================
+   *
+   * When the user switches to an Arrowhead / Medieval Coin / Companion /
+   * Senet tab, scan the visible torn-item.large images, extract each
+   * item name and its stock count, and log them. This lets us confirm
+   * detection works and fills in the item names needed for future
+   * full highlighting support.
+   *
+   * Items already in ALL_ITEM_NAMES (plushies / flowers) are skipped.
+   */
+
+  function scanAndLogNewSections() {
+    // Only run if we're on a new section tab (not plushie or flower)
+    const onPlushie = !!findElementByText(PLUSHIE_SECTION_TEXT);
+    const onFlower = !!findElementByText(FLOWER_SECTION_TEXT);
+    if (onPlushie || onFlower) return; // handled by main highlight logic
+
+    let activeSection = 'unknown';
+    for (let si = 0; si < NEW_SECTION_TEXTS.length; si++) {
+      if (findElementByText(NEW_SECTION_TEXTS[si])) {
+        activeSection = NEW_SECTION_TEXTS[si].replace('To exchange ', '').replace(' for 10 points', '');
+        break;
+      }
+    }
+
+    const imgs = document.querySelectorAll(ITEM_IMG_SELECTOR);
+    if (imgs.length === 0) return;
+
+    const discovered = [];
+    const knownLower = {};
+    for (let n = 0; n < ALL_ITEM_NAMES.length; n++) {
+      knownLower[ALL_ITEM_NAMES[n].toLowerCase()] = true;
+    }
+
+    for (let i = 0; i < imgs.length; i++) {
+      const img = imgs[i];
+      let container = img.parentElement;
+      let name = null;
+      let count = null;
+
+      for (let up = 0; up < 10; up++) {
+        if (!container || container === document.body) break;
+        const imgCount = container.querySelectorAll(ITEM_IMG_SELECTOR).length;
+        if (imgCount === 1) {
+          // Extract item name: first non-numeric, non-empty text node
+          const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null, false);
+          let tn = walker.nextNode();
+          while (tn) {
+            const t = tn.textContent.trim();
+            if (t && t.length >= 3 && t.length <= 60 && !/^\d+$/.test(t.replace(/,/g, ''))) {
+              if (!knownLower[t.toLowerCase()]) {
+                name = t;
+              }
+              break;
+            }
+            tn = walker.nextNode();
+          }
+          if (name) {
+            count = extractDomCount(container, name);
+          }
+          break;
+        }
+        container = container.parentElement;
+      }
+
+      if (name) {
+        discovered.push(name + '=' + String(count !== null ? count : '?'));
+      }
+    }
+
+    if (discovered.length > 0) {
+      console.log(LOG_TAG, 'New section "' + activeSection + '" — items discovered:', discovered.join(', '));
+      console.log(LOG_TAG, 'Add these to the item list for full highlight support.');
+    } else {
+      console.log(LOG_TAG, 'New section "' + activeSection + '" — no items extracted (all may be in known lists).');
     }
   }
 
@@ -1633,7 +1739,12 @@
       const imgCount = document.querySelectorAll(ITEM_IMG_SELECTOR).length;
       const hasPlushie = !!findElementByText(PLUSHIE_SECTION_TEXT);
       const hasFlower = !!findElementByText(FLOWER_SECTION_TEXT);
-      return String(imgCount) + '|' + String(hasPlushie) + '|' + String(hasFlower);
+      // Also track new sets so switching to their tabs triggers re-detection
+      let newSectionFlags = '';
+      for (let si = 0; si < NEW_SECTION_TEXTS.length; si++) {
+        newSectionFlags += (!!findElementByText(NEW_SECTION_TEXTS[si]) ? '1' : '0');
+      }
+      return String(imgCount) + '|' + String(hasPlushie) + '|' + String(hasFlower) + '|' + newSectionFlags;
     }
 
     let lastState = readPageState();
@@ -1709,12 +1820,14 @@
   }
 
   function hasMuseumContent() {
-    return !!(
-      document.querySelector(ITEM_IMG_SELECTOR) ||
-      findElementByText('Exchange rare items for points') ||
-      findElementByText(PLUSHIE_SECTION_TEXT) ||
-      findElementByText(FLOWER_SECTION_TEXT)
-    );
+    if (document.querySelector(ITEM_IMG_SELECTOR)) return true;
+    if (findElementByText('Exchange rare items for points')) return true;
+    if (findElementByText(PLUSHIE_SECTION_TEXT)) return true;
+    if (findElementByText(FLOWER_SECTION_TEXT)) return true;
+    for (let si = 0; si < NEW_SECTION_TEXTS.length; si++) {
+      if (findElementByText(NEW_SECTION_TEXTS[si])) return true;
+    }
+    return false;
   }
 
   function init() {
