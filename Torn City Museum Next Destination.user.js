@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.45
+// @version      1.0.46
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.45';
+  const VERSION = '1.0.46';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -527,6 +527,14 @@
    * Used alongside the hardcoded ITEM_COUNTRIES map.
    */
   let tcmndItemCountries = {};
+
+  /**
+   * Per-section last-known image count used to detect when an inline item-detail
+   * panel opens (the panel inserts an extra <img> into the exchange section, so
+   * the count increases). When that happens the generic section handler skips the
+   * re-run so the popup is never used as an item container.
+   */
+  const tcmndGenericImgCounts = {};
 
   /**
    * Fetch all plushie, flower and artifact buy/market prices.
@@ -1898,6 +1906,34 @@
 
     if (sectionImgs.length === 0) return 0;
 
+    // ── Popup guard ───────────────────────────────────────────────────────────
+    // When the player opens an item's detail panel it inserts an extra image
+    // inside the exchange section, increasing sectionImgs.length. If we try to
+    // build the container map in that state the panel's container is incorrectly
+    // used as an item highlight target. Guard: if the count has increased since
+    // the last successful run for this section, skip this pass so the previous
+    // correct highlights remain until the panel is closed.
+    const prevImgCount = tcmndGenericImgCounts[sectionLabel];
+    if (prevImgCount !== undefined && sectionImgs.length > prevImgCount) {
+      console.log(LOG_TAG, '"' + sectionLabel + '" — img count ' + String(sectionImgs.length) +
+        ' > expected ' + String(prevImgCount) + '; detail panel open — skipping re-run.');
+      return 0;
+    }
+    tcmndGenericImgCounts[sectionLabel] = sectionImgs.length;
+
+    // ── Unified text-first item discovery ─────────────────────────────────────
+    // Walk ELEMENT nodes in sectionContainer. For each element whose textContent
+    // looks like an item name, walk UP from that element to find the item card
+    // (first ancestor with exactly one item image).
+    //
+    // Rationale for walking from the NAME element rather than the IMAGE element:
+    //   • The detail panel (when open) is inserted as a SIBLING of the name
+    //     element, not as an ancestor. Walking up from the name therefore never
+    //     reaches the panel, so the panel image does not inflate imgCount for
+    //     the item card.
+    //   • element.textContent correctly handles names split across child text
+    //     nodes (e.g. <span>Quartz</span> Point → textContent "Quartz Point").
+    //
     // Build item map: itemName → { containerEl, domCount }
     const itemMap = {};
     const knownLower = {};
@@ -1905,138 +1941,72 @@
       knownLower[ALL_ITEM_NAMES[kn].toLowerCase()] = true;
     }
 
-    for (let i = 0; i < sectionImgs.length; i++) {
-      const img = sectionImgs[i];
-      let container = img.parentElement;
-
-      for (let up = 0; up < 10; up++) {
-        if (!container || container === sectionContainer || container === document.body) break;
-        // Count images only within this sub-container (auto-scoped since container < sectionContainer)
-        const imgCount = container.querySelectorAll(ITEM_IMG_SELECTOR).length;
-        if (imgCount === 1) {
-          const itemName = extractGenericItemName(container, knownLower);
-          if (itemName && !itemMap[itemName]) {
-            const domCount = extractDomCount(container, itemName);
-            itemMap[itemName] = {
-              containerEl: container,
-              domCount: domCount !== null ? domCount : 0
-            };
-          }
-          break;
-        }
-        container = container.parentElement;
+    // Find exchange paragraph so its bold fragments are excluded from name scan
+    let tfPara = null;
+    const tfPW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
+    let tfPN = tfPW.nextNode();
+    while (tfPN) {
+      const tfPT = tfPN.textContent.trim();
+      if (tfPT.length >= 20 && tfPT.length <= 100 && EXCHANGE_RE.test(tfPT)) {
+        tfPara = tfPN;
       }
+      tfPN = tfPW.nextNode();
     }
 
-    if (Object.keys(itemMap).length < sectionImgs.length) {
-      // ── Strategy B: text-first index pairing ─────────────────────────────────
-      // Runs when Strategy A (image-first) found fewer items than images. Handles
-      // DOM layouts where item names are siblings of the image cells (e.g. a CSS
-      // grid row above the image row) rather than ancestors, so walking up from
-      // the image never reaches the name text node. Also fills gaps when A finds
-      // some but not all items (e.g. the last item in a row has a different DOM
-      // structure from the rest).
-      console.log(LOG_TAG, '"' + sectionLabel + '" — Strategy A: ' + String(Object.keys(itemMap).length) + '/' + String(sectionImgs.length) + ' items; running Strategy B for missing items.');
+    const tfWalker = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
+    let tfEl = tfWalker.nextNode();
 
-      // Step B1 — find the exchange paragraph
-      let bPara = null;
-      const bPW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
-      let bPN = bPW.nextNode();
-      while (bPN) {
-        const bPT = bPN.textContent.trim();
-        if (bPT.length >= 20 && bPT.length <= 100 && EXCHANGE_RE.test(bPT)) {
-          bPara = bPN; // keep last (deepest) match
-        }
-        bPN = bPW.nextNode();
+    while (tfEl) {
+      if (tfPara && tfPara.contains(tfEl)) {
+        tfEl = tfWalker.nextNode();
+        continue;
       }
-      console.log(LOG_TAG, '"' + sectionLabel + '" — B exchange para: ' +
-        (bPara ? '<' + bPara.tagName + '> len=' + String(bPara.textContent.trim().length) : 'not found'));
 
-      // Step B2 — collect candidate item names using element.textContent
-      // Switching from SHOW_TEXT to SHOW_ELEMENT so that item names split across
-      // multiple child text nodes (e.g. <span><span>Quartz</span> Point</span>)
-      // are assembled correctly. The outer element's textContent = "Quartz Point"
-      // even when no single text node contains the full string.
-      //
-      // Candidate criteria:
-      //   • length 5–30 chars (item names are short proper nouns)
-      //   • contains a space (all museum item names are multi-word)
-      //   • Title Case start: first char uppercase, second lowercase
-      //   • no digits (count badges must not be captured)
-      //   • not a set-descriptor word ("Arrowhead set", "Medieval coin set", …)
-      //   • not a UI text fragment
-      //   • not a known plushie/flower name
-      //   • no duplicates (multiple ancestor elements share the same textContent)
-      const bCands = [];
-      const bCW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
-      let bCN = bCW.nextNode();
-      while (bCN) {
-        if (bPara && bPara.contains(bCN)) {
-          bCN = bCW.nextNode();
-          continue; // skip elements inside the exchange-header paragraph
-        }
-        const bCT = bCN.textContent.trim();
-        if (bCT.length >= 5 && bCT.length <= 30 &&
-            bCT.indexOf(' ') !== -1 &&
-            /^[A-Z][a-z]/.test(bCT) &&
-            !/\d/.test(bCT) &&
-            !/\bset\b/i.test(bCT) &&
-            !/^(exchange|you\b|require|number\s|sets?\b|\$|price)/i.test(bCT) &&
-            !knownLower[bCT.toLowerCase()] &&
-            bCands.indexOf(bCT) === -1) {
-          bCands.push(bCT);
-        }
-        bCN = bCW.nextNode();
-      }
-      console.log(LOG_TAG, '"' + sectionLabel + '" — B candidates: ' + JSON.stringify(bCands) +
-        ' | images: ' + String(sectionImgs.length));
+      const tfName = tfEl.textContent.trim();
 
-      // Step B3 — pair candidates with images by index
-      if (bCands.length > 0 && bCands.length === sectionImgs.length) {
-        for (let bIdx = 0; bIdx < sectionImgs.length; bIdx++) {
-          const bName = bCands[bIdx];
-          const bImg = sectionImgs[bIdx];
+      // Candidate filter: multi-word proper noun, no digits, no set descriptors
+      if (tfName.length >= 5 && tfName.length <= 30 &&
+          tfName.indexOf(' ') !== -1 &&
+          /^[A-Z][a-z]/.test(tfName) &&
+          !/\d/.test(tfName) &&
+          !/\bset\b/i.test(tfName) &&
+          !/^(exchange|you\b|require|number\s|sets?\b|\$|price)/i.test(tfName) &&
+          !knownLower[tfName.toLowerCase()] &&
+          !itemMap[tfName]) {
 
-          // Find the closest single-image container, falling back to img.parentElement
-          let bCont = bImg.parentElement;
-          for (let bUp = 0; bUp < 8; bUp++) {
-            if (!bCont || bCont === sectionContainer || bCont === document.body) {
-              bCont = bImg.parentElement;
-              break;
-            }
-            const bImgCnt = bCont.querySelectorAll(ITEM_IMG_SELECTOR).length;
-            if (bImgCnt === 1) break;
-            if (bImgCnt > 1) {
-              bCont = bImg.parentElement;
-              break;
-            }
-            bCont = bCont.parentElement;
+        // Walk UP from this name element to find the item card (imgCount === 1).
+        // Stop if we hit sectionContainer (too broad) or a multi-image ancestor.
+        let tfCont = tfEl.parentElement;
+        for (let tfUp = 0; tfUp < 8; tfUp++) {
+          if (!tfCont || tfCont === sectionContainer || tfCont === document.body) {
+            tfCont = null;
+            break;
           }
-          if (!bCont) bCont = bImg.parentElement;
-
-          if (bName && !itemMap[bName]) {
-            // Try to find the inventory count in the image's container.
-            // If the image cell contains only the img (no count badge inside),
-            // also check the parent cell — the count badge may sit in a sibling element.
-            let bDomCnt = extractDomCount(bCont, bName);
-            if (bDomCnt === null && bCont.parentElement && bCont.parentElement !== sectionContainer) {
-              const bParentImgCnt = bCont.parentElement.querySelectorAll(ITEM_IMG_SELECTOR).length;
-              if (bParentImgCnt === 1) {
-                bDomCnt = extractDomCount(bCont.parentElement, bName);
-              }
-            }
-            itemMap[bName] = {
-              containerEl: bCont,
-              domCount: bDomCnt !== null ? bDomCnt : 0
-            };
-            console.log(LOG_TAG, '"' + sectionLabel + '" B[' + String(bIdx) + ']: "' + bName +
-              '" → <' + bCont.tagName + '> cnt=' + String(bDomCnt));
-          }
+          const tfImgCnt = tfCont.querySelectorAll(ITEM_IMG_SELECTOR).length;
+          if (tfImgCnt === 1) break;
+          if (tfImgCnt > 1) { tfCont = null; break; }
+          tfCont = tfCont.parentElement;
         }
-      } else {
-        console.log(LOG_TAG, '"' + sectionLabel + '" — B candidate count (' + String(bCands.length) +
-          ') ≠ image count (' + String(sectionImgs.length) + '); pairing skipped.');
+
+        if (tfCont) {
+          let tfDomCnt = extractDomCount(tfCont, tfName);
+          // Also check parent when count badge is in a sibling cell
+          if (tfDomCnt === null && tfCont.parentElement && tfCont.parentElement !== sectionContainer) {
+            const tfParentImgCnt = tfCont.parentElement.querySelectorAll(ITEM_IMG_SELECTOR).length;
+            if (tfParentImgCnt === 1) {
+              tfDomCnt = extractDomCount(tfCont.parentElement, tfName);
+            }
+          }
+          itemMap[tfName] = {
+            containerEl: tfCont,
+            domCount: tfDomCnt !== null ? tfDomCnt : 0
+          };
+          console.log(LOG_TAG, '"' + sectionLabel + '" found: "' + tfName + '" → <' + tfCont.tagName +
+            '> cnt=' + String(tfDomCnt));
+        }
       }
+
+      tfEl = tfWalker.nextNode();
     }
 
     const discoveredNames = Object.keys(itemMap);
