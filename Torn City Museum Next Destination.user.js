@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.44
+// @version      1.0.45
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.44';
+  const VERSION = '1.0.45';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1188,16 +1188,10 @@
         return;
       }
 
-      // Safety guard: skip containers with too much text content.
-      // Individual item cards hold only the item name + a short count (≤ ~30 chars).
-      // An inline detail panel opened by clicking an artifact holds a full item
-      // description, market stats, etc. (200+ chars) — that should not be highlighted.
-      const containerTextLen = container.textContent.trim().length;
-      if (containerTextLen > 100) {
-        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" text=' +
-          String(containerTextLen) + ' chars (detail panel?) — skipping highlight.');
-        return;
-      }
+      // Note: an inline item-detail panel that opens when clicking an artifact
+      // will be rejected during container selection (Strategy A/B) because it
+      // contains the same item name that is already in itemMap from the initial
+      // run, so the !itemMap[name] guard skips it.
 
       container.classList.add(HL_CLASSES[assignment.colorIndex]);
       container.style.setProperty('position', 'relative', 'important');
@@ -1958,21 +1952,38 @@
       console.log(LOG_TAG, '"' + sectionLabel + '" — B exchange para: ' +
         (bPara ? '<' + bPara.tagName + '> len=' + String(bPara.textContent.trim().length) : 'not found'));
 
-      // Step B2 — collect candidate item names
+      // Step B2 — collect candidate item names using element.textContent
+      // Switching from SHOW_TEXT to SHOW_ELEMENT so that item names split across
+      // multiple child text nodes (e.g. <span><span>Quartz</span> Point</span>)
+      // are assembled correctly. The outer element's textContent = "Quartz Point"
+      // even when no single text node contains the full string.
+      //
+      // Candidate criteria:
+      //   • length 5–30 chars (item names are short proper nouns)
+      //   • contains a space (all museum item names are multi-word)
+      //   • Title Case start: first char uppercase, second lowercase
+      //   • no digits (count badges must not be captured)
+      //   • not a set-descriptor word ("Arrowhead set", "Medieval coin set", …)
+      //   • not a UI text fragment
+      //   • not a known plushie/flower name
+      //   • no duplicates (multiple ancestor elements share the same textContent)
       const bCands = [];
-      const bCW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_TEXT, null, false);
+      const bCW = document.createTreeWalker(sectionContainer, NodeFilter.SHOW_ELEMENT, null, false);
       let bCN = bCW.nextNode();
       while (bCN) {
-        if (bPara && bPara.contains(bCN.parentElement)) {
+        if (bPara && bPara.contains(bCN)) {
           bCN = bCW.nextNode();
-          continue; // skip bold exchange-header fragments
+          continue; // skip elements inside the exchange-header paragraph
         }
         const bCT = bCN.textContent.trim();
-        if (bCT.length >= 3 && bCT.length <= 50 &&
-            /^[A-Z]/.test(bCT) &&
-            !/^[\d,.\s]+$/.test(bCT) &&
-            !/^(exchange|you\b|require|number\s|set\b|sets\b|\$|price)/i.test(bCT) &&
-            !knownLower[bCT.toLowerCase()]) {
+        if (bCT.length >= 5 && bCT.length <= 30 &&
+            bCT.indexOf(' ') !== -1 &&
+            /^[A-Z][a-z]/.test(bCT) &&
+            !/\d/.test(bCT) &&
+            !/\bset\b/i.test(bCT) &&
+            !/^(exchange|you\b|require|number\s|sets?\b|\$|price)/i.test(bCT) &&
+            !knownLower[bCT.toLowerCase()] &&
+            bCands.indexOf(bCT) === -1) {
           bCands.push(bCT);
         }
         bCN = bCW.nextNode();
@@ -2069,15 +2080,20 @@
 
   /**
    * Extracts an item name from a single-item container's text nodes.
-   * Rejects numeric strings, short UI labels, and known plushie/flower names.
+   * Applies the same criteria as Strategy B candidate collection:
+   * multi-word, Title Case start, no digits, no set-descriptor words,
+   * not a known plushie/flower name.
    */
   function extractGenericItemName(containerEl, knownLower) {
     const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT, null, false);
     let node = walker.nextNode();
     while (node) {
       const t = node.textContent.trim();
-      if (t.length >= 2 && t.length <= 60 &&
-          !/^[\d,.\s]+$/.test(t) &&
+      if (t.length >= 5 && t.length <= 30 &&
+          t.indexOf(' ') !== -1 &&
+          /^[A-Z][a-z]/.test(t) &&
+          !/\d/.test(t) &&
+          !/\bset\b/i.test(t) &&
           !/^(exchange|points?|number of sets?|sets?|\$|price)/i.test(t) &&
           !knownLower[t.toLowerCase()]) {
         return t;
