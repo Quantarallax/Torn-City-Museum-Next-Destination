@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.43
+// @version      1.0.44
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.43';
+  const VERSION = '1.0.44';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -106,6 +106,27 @@
   const PLUSHIE_NAMES = Object.keys(PLUSHIE_ITEMS);
   const FLOWER_NAMES = Object.keys(FLOWER_ITEMS);
   const ALL_ITEM_NAMES = PLUSHIE_NAMES.concat(FLOWER_NAMES);
+
+  /**
+   * Arrowhead items can be purchased abroad but the Torn API returns buy_price: null
+   * for them. These midpoint prices (sourced from known vendor price ranges) are used
+   * as the hover tooltip value so the player still sees a useful approximate figure.
+   *
+   *   Basalt Point      $107,253 – $130,542  →  mid $118,898
+   *   Chalcedony Point  $124,364 – $132,523  →  mid $128,444
+   *   Chert Point       $104,228 – $120,570  →  mid $112,399
+   *   Obsidian Point    $108,363 – $135,000  →  mid $121,682
+   *   Quartz Point      $129,509 – $148,657  →  mid $139,083
+   *   Quartzite Point   $114,601 – $117,615  →  mid $116,108
+   */
+  const ARTIFACT_HARDCODED_PRICES = {
+    'Basalt Point': 118898,
+    'Chalcedony Point': 128444,
+    'Chert Point': 112399,
+    'Obsidian Point': 121682,
+    'Quartz Point': 139083,
+    'Quartzite Point': 116108
+  };
 
   const COL_RED = '#e84545';
   const COL_YELLOW = '#f5c518';
@@ -575,30 +596,32 @@
           if (!storeName) return;
 
           /*
-           * The "value" field is an object: { vendor, buy_price, sell_price, market_price }
-           * buy_price — the foreign shop purchase price (null for city-find / black-market items).
-           * We intentionally do NOT fall back to market_price here: that is the Torn City
-           * player-trading price, not a "buy abroad" price. If buy_price is null, no hover
-           * price should be shown (the item has no vendor shop).
+           * Price to show on hover: only the vendor shop buy_price ("buy abroad").
+           * Arrowhead items return buy_price: null from the API even though they are
+           * purchasable — fall back to hardcoded midpoint values in ARTIFACT_HARDCODED_PRICES.
+           * All other artifacts with no buy_price should show no hover price.
            */
-          let price = 0;
           const itemBuyPrice = (item.value && typeof item.value === 'object') ? item.value.buy_price : null;
-          if (itemBuyPrice) {
-            price = Math.round(Number(itemBuyPrice));
+          const hasHardcode = isArtifact && !!ARTIFACT_HARDCODED_PRICES[storeName];
+          const effectivePrice = itemBuyPrice || (hasHardcode ? ARTIFACT_HARDCODED_PRICES[storeName] : 0);
+          if (effectivePrice > 0) {
+            tcmndItemPrices[storeName] = Math.round(Number(effectivePrice));
           }
 
-          if (price > 0) {
-            tcmndItemPrices[storeName] = price;
-          }
-
-          // Country label — prefer the vendor country; fall back to "City Find" for
-          // items with no vendor shop (buy_price null means no foreign store to buy from).
+          /*
+           * Country label:
+           *  - Has vendor country AND is genuinely purchasable (API buy_price or hardcoded)
+           *    → show the vendor country.
+           *  - Otherwise (Ganesha Sculpture, Vairocana Buddha, etc. — vendor country may
+           *    exist in API but item has no actual shop price and is not in the hardcoded
+           *    list) → "City Find".
+           */
           const itemVendorCountry = (item.value && typeof item.value === 'object' && item.value.vendor)
             ? item.value.vendor.country
             : null;
-          if (itemVendorCountry) {
+          if (itemVendorCountry && (itemBuyPrice || hasHardcode)) {
             tcmndItemCountries[storeName] = itemVendorCountry;
-          } else if (item.is_found_in_city || !itemBuyPrice) {
+          } else {
             tcmndItemCountries[storeName] = 'City Find';
           }
         });
@@ -1165,13 +1188,14 @@
         return;
       }
 
-      // Safety guard: skip containers that are wider than a typical item card.
-      // A rendered width > 300px usually means an inline item-detail panel has opened
-      // (which happens for artifact sets but not plushies/flowers). Item cards are ≤ ~150px.
-      const containerWidth = container.getBoundingClientRect().width;
-      if (containerWidth > 300) {
-        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" width=' +
-          Math.round(containerWidth) + 'px (detail panel open?) — skipping highlight.');
+      // Safety guard: skip containers with too much text content.
+      // Individual item cards hold only the item name + a short count (≤ ~30 chars).
+      // An inline detail panel opened by clicking an artifact holds a full item
+      // description, market stats, etc. (200+ chars) — that should not be highlighted.
+      const containerTextLen = container.textContent.trim().length;
+      if (containerTextLen > 100) {
+        console.warn(LOG_TAG, 'Container for "' + assignment.name + '" text=' +
+          String(containerTextLen) + ' chars (detail panel?) — skipping highlight.');
         return;
       }
 
