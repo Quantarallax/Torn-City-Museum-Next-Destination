@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.29
+// @version      1.0.30
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.29';
+  const VERSION = '1.0.30';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -36,7 +36,11 @@
    * The src HTML attribute is a relative path (/images/items/186/large.png),
    * so matching by CSS class is the only reliable approach.
    */
-  const ITEM_IMG_SELECTOR = 'img.torn-item.large';
+  /*
+   * Selector for Torn item images. Torn previously used class="torn-item large"
+   * but the class has changed. Matching by URL pattern is more robust.
+   */
+  const ITEM_IMG_SELECTOR = 'img[src*="/images/items/"]';
 
   /**
    * Torn has deprecated the `inventory` API selection (returns the string
@@ -574,11 +578,9 @@
 
     await fetchCategoryPrices('Plushie');
     await fetchCategoryPrices('Flower');
-    // New sets — try known category names; errors are handled silently inside fetchCategoryPrices
-    await fetchCategoryPrices('Arrowhead');
-    await fetchCategoryPrices('MedievalCoin');
-    await fetchCategoryPrices('Companion');
-    await fetchCategoryPrices('Senet');
+    // New set categories removed until correct API category names are confirmed
+    // (attempts with 'Arrowhead', 'MedievalCoin', 'Companion', 'Senet' returned
+    // generic items like "Hammer" — wrong category names for the Torn v2 API)
 
     const cached = Object.keys(tcmndItemPrices).length;
     console.log(LOG_TAG, 'Item prices cached:', cached, 'items');
@@ -1529,7 +1531,15 @@
     }
 
     if (nearestSec === null) {
-      setNoCalendar(String(museumDayEvents.length) + ' Museum Day events in calendar, none in future');
+      if (museumDayEvents.length > 0) {
+        const currentYear = new Date().getUTCFullYear();
+        console.log(LOG_TAG, 'Museum Day has finished for ' + String(currentYear) +
+          ' (' + String(museumDayEvents.length) + ' event(s) in calendar, all in the past).');
+        if (calStatusEl) calStatusEl.textContent = 'Museum Day has finished for ' + String(currentYear);
+        if (countdownEl) countdownEl.textContent = '';
+      } else {
+        setNoCalendar('no Museum Day events found in calendar response');
+      }
       return;
     }
 
@@ -1666,7 +1676,7 @@
    * =========================================================
    *
    * When the user switches to an Arrowhead / Medieval Coin / Companion /
-   * Senet tab, scan the visible torn-item.large images, extract each
+   * Senet tab, scan the visible item images, extract each
    * item name and its stock count, and log them. This lets us confirm
    * detection works and fills in the item names needed for future
    * full highlighting support.
@@ -1747,7 +1757,7 @@
    *
    * Two triggers for re-applying highlights:
    *
-   *  1. The count of img.torn-item.large elements changes — covers
+   *  1. The count of item images (matched by URL) changes — covers
    *     cases where Torn loads new DOM content for the switched tab.
    *
    *  2. Whether the plushie or flower section header text is present
