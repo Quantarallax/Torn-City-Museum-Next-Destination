@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.31
+// @version      1.0.32
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.31';
+  const VERSION = '1.0.32';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -499,14 +499,25 @@
   let tcmndItemPrices = {};
 
   /**
-   * Fetch all plushie and flower buy prices using the correct category endpoints:
+   * Dynamic country labels for non-plushie/flower items (e.g. Artifact items).
+   * Populated from vendor.country in the API response.
+   * Used alongside the hardcoded ITEM_COUNTRIES map.
+   */
+  let tcmndItemCountries = {};
+
+  /**
+   * Fetch all plushie, flower and artifact buy/market prices.
+   * Endpoints used:
    *   /v2/torn/items?cat=Plushie&sort=ASC
    *   /v2/torn/items?cat=Flower&sort=ASC
+   *   /v2/torn/items?cat=Artifact&sort=ASC  (covers arrowheads, medieval coins, etc.)
    *
-   * Items are matched by name (case-insensitive) rather than ID so the
-   * item list doesn't depend on what IDs happen to be visible in the DOM.
+   * For Plushie/Flower: items are matched by name against ALL_ITEM_NAMES (known list).
+   * For Artifact: ALL items are stored by their raw API name so the generic section
+   *   handler can show correct country labels and prices without hardcoded lists.
    *
-   * Price source: item.value.buy_price (the foreign shop buy price).
+   * Price source: item.value.buy_price, falling back to item.value.market_price when
+   * buy_price is null (common for Artifact items sourced from the Black Market).
    * The v2 API returns "value" as an object:
    *   { vendor: { country, name }, buy_price, sell_price, market_price }
    */
@@ -541,21 +552,29 @@
         itemArr.forEach(function (item) {
           if (!item || !item.name) return;
 
-          // Match item name case-insensitively against our known lists
-          const lcItemName = item.name.trim().toLowerCase();
-          let matchedName = null;
-          for (let ni = 0; ni < ALL_ITEM_NAMES.length; ni++) {
-            if (ALL_ITEM_NAMES[ni].toLowerCase() === lcItemName) {
-              matchedName = ALL_ITEM_NAMES[ni];
-              break;
+          const rawName = item.name.trim();
+          const isArtifact = (category === 'Artifact');
+
+          // For Artifact items, store by raw name directly (no filter against known lists)
+          // For Plushie/Flower, match against ALL_ITEM_NAMES only
+          let storeName = null;
+          if (isArtifact) {
+            storeName = rawName;
+          } else {
+            const lcItemName = rawName.toLowerCase();
+            for (let ni = 0; ni < ALL_ITEM_NAMES.length; ni++) {
+              if (ALL_ITEM_NAMES[ni].toLowerCase() === lcItemName) {
+                storeName = ALL_ITEM_NAMES[ni];
+                break;
+              }
             }
           }
-          if (!matchedName) return;
+          if (!storeName) return;
 
           /*
            * The "value" field is an object: { vendor, buy_price, sell_price, market_price }
-           * We want buy_price — the price paid in the foreign country shop.
-           * Fall back to market_price if buy_price is absent.
+           * buy_price — the foreign shop purchase price (null for Black Market items).
+           * Fall back to market_price when buy_price is absent/null.
            */
           let price = 0;
           if (item.value && typeof item.value === 'object') {
@@ -568,7 +587,13 @@
           }
 
           if (price > 0) {
-            tcmndItemPrices[matchedName] = Math.round(Number(price));
+            tcmndItemPrices[storeName] = Math.round(Number(price));
+          }
+
+          // Extract vendor country for dynamic country labels (used by generic section handler)
+          if (item.value && typeof item.value === 'object' &&
+              item.value.vendor && item.value.vendor.country) {
+            tcmndItemCountries[storeName] = item.value.vendor.country;
           }
         });
       } catch (err) {
@@ -578,9 +603,9 @@
 
     await fetchCategoryPrices('Plushie');
     await fetchCategoryPrices('Flower');
-    // New set categories removed until correct API category names are confirmed
-    // (attempts with 'Arrowhead', 'MedievalCoin', 'Companion', 'Senet' returned
-    // generic items like "Hammer" — wrong category names for the Torn v2 API)
+    // Artifact covers all non-plushie/flower museum sets:
+    // arrowhead points, medieval coins, companion scripts, senet pieces, sculptures, fossils
+    await fetchCategoryPrices('Artifact');
 
     const cached = Object.keys(tcmndItemPrices).length;
     console.log(LOG_TAG, 'Item prices cached:', cached, 'items');
@@ -1089,7 +1114,7 @@
       badge.textContent = String(assignment.count);
       container.appendChild(badge);
 
-      const country = ITEM_COUNTRIES[assignment.name] || 'Unknown';
+      const country = ITEM_COUNTRIES[assignment.name] || tcmndItemCountries[assignment.name] || 'Unknown';
       const label = document.createElement('span');
       label.className = 'tcmnd-country tcmnd-country-' + TIER_CSS[assignment.colorIndex];
       label.textContent = '\u2708 ' + country;
