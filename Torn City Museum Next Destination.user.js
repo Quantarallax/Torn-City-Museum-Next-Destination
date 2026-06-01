@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.36
+// @version      1.0.37
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.36';
+  const VERSION = '1.0.37';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1750,17 +1750,20 @@
    */
 
   function runGenericExchangeSection(displayData) {
-    // Skip if the plushie or flower section is VISIBLE (not just present in DOM).
-    // Torn keeps hidden tab panels in the DOM after they have been visited, so a
-    // plain text search would always find plushie/flower text even on other tabs.
+    console.log(LOG_TAG, '[Generic] runGenericExchangeSection called.');
+
+    // Debug: show plushie/flower element visibility so we can diagnose bail-out issues
     const plushieEl = findElementByText(PLUSHIE_SECTION_TEXT);
     const flowerEl = findElementByText(FLOWER_SECTION_TEXT);
-    if ((plushieEl && isElementVisible(plushieEl)) ||
-        (flowerEl && isElementVisible(flowerEl))) {
-      return 0;
-    }
+    const plushieVis = plushieEl ? isElementVisible(plushieEl) : false;
+    const flowerVis = flowerEl ? isElementVisible(flowerEl) : false;
+    console.log(LOG_TAG, '[Generic] Plushie section: found=' + String(!!plushieEl) + ' visible=' + String(plushieVis));
+    console.log(LOG_TAG, '[Generic] Flower section:  found=' + String(!!flowerEl) + ' visible=' + String(flowerVis));
 
-    // Find the active exchange section header by flexible pattern
+    // POSITIVE DETECTION: scan for a visible non-plushie/flower exchange section.
+    // We no longer bail based on plushie/flower visibility — that approach failed
+    // when Torn keeps both panels simultaneously rendered (no display:none on inactive
+    // panel). Instead we look for the FIRST VISIBLE artifact exchange header.
     const EXCHANGE_RE = /exchange\s+.+?\s+for\s+[\d,]+\s+points/i;
     let sectionHeaderEl = null;
     let sectionLabel = 'Unknown Set';
@@ -1769,18 +1772,30 @@
     let tnode = twalker.nextNode();
     while (tnode) {
       const ttext = tnode.textContent.trim();
-      if (EXCHANGE_RE.test(ttext) &&
-          ttext.toLowerCase().indexOf('plushie') === -1 &&
-          ttext.toLowerCase().indexOf('exotic flower') === -1) {
-        sectionHeaderEl = tnode.parentElement;
-        const mLabel = ttext.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
-        if (mLabel) sectionLabel = mLabel[1].trim();
-        break;
+      if (EXCHANGE_RE.test(ttext)) {
+        const hasPlushie = ttext.toLowerCase().indexOf('plushie') !== -1;
+        const hasFlower = ttext.toLowerCase().indexOf('exotic flower') !== -1;
+        const candidate = tnode.parentElement;
+        const vis = isElementVisible(candidate);
+        console.log(LOG_TAG, '[Generic] Exchange text: "' + ttext.substring(0, 55) + '" — plushie=' + String(hasPlushie) + ' flower=' + String(hasFlower) + ' visible=' + String(vis));
+        if (!hasPlushie && !hasFlower) {
+          if (vis) {
+            sectionHeaderEl = candidate;
+            const mLabel = ttext.match(/exchange\s+(?:a|an)\s+(.+?)\s+(?:set|collection)\s+for/i);
+            if (mLabel) sectionLabel = mLabel[1].trim();
+            console.log(LOG_TAG, '[Generic] Selected artifact section: "' + sectionLabel + '"');
+            break;
+          }
+          console.log(LOG_TAG, '[Generic] Artifact section header found but not visible — continuing search.');
+        }
       }
       tnode = twalker.nextNode();
     }
 
-    if (!sectionHeaderEl) return 0;
+    if (!sectionHeaderEl) {
+      console.log(LOG_TAG, '[Generic] No visible artifact section found — nothing to highlight.');
+      return 0;
+    }
 
     // Walk up to the smallest ancestor of the header that also holds item images
     let sectionContainer = sectionHeaderEl;
