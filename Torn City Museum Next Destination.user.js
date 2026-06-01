@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.33
+// @version      1.0.35
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.33';
+  const VERSION = '1.0.35';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -635,6 +635,25 @@
       node = walker.nextNode();
     }
     return null;
+  }
+
+  /**
+   * Returns true only if the element AND all its ancestors up to <body>
+   * are visually rendered (no display:none or visibility:hidden in the chain).
+   *
+   * Torn keeps every previously-visited tab panel in the DOM — they are
+   * CSS-hidden but still searchable via text walkers. This helper lets us
+   * distinguish "present in DOM" from "actually visible on screen".
+   */
+  function isElementVisible(el) {
+    if (!el) return false;
+    let node = el;
+    while (node && node !== document.body) {
+      const cs = window.getComputedStyle(node);
+      if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+      node = node.parentElement;
+    }
+    return true;
   }
 
   function extractItemId(img) {
@@ -1731,8 +1750,13 @@
    */
 
   function runGenericExchangeSection(displayData) {
-    // Skip — plushie and flower pages are handled by their own path
-    if (findElementByText(PLUSHIE_SECTION_TEXT) || findElementByText(FLOWER_SECTION_TEXT)) {
+    // Skip if the plushie or flower section is VISIBLE (not just present in DOM).
+    // Torn keeps hidden tab panels in the DOM after they have been visited, so a
+    // plain text search would always find plushie/flower text even on other tabs.
+    const plushieEl = findElementByText(PLUSHIE_SECTION_TEXT);
+    const flowerEl = findElementByText(FLOWER_SECTION_TEXT);
+    if ((plushieEl && isElementVisible(plushieEl)) ||
+        (flowerEl && isElementVisible(flowerEl))) {
       return 0;
     }
 
