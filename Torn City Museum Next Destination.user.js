@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.48
+// @version      1.0.49
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.48';
+  const VERSION = '1.0.49';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -126,6 +126,22 @@
     'Obsidian Point': 121682,
     'Quartz Point': 139083,
     'Quartzite Point': 116108
+  };
+
+  /**
+   * The Companion Script items have inconsistent naming between the Torn City
+   * page (DOM) and the v2 API — different scholar names and colon spacing.
+   * Maps the lowercase NORMALISED DOM name → the lowercase NORMALISED API name
+   * so the country/price lookup can bridge the gap.
+   *
+   *   DOM text                          API name
+   *   "Companion Script: Ibn Masud"  →  "Companion Script: Abdullah"
+   *   "Companion Script: Ubay Ibn Ka'b" → "Companion Script: Ubay"
+   *   "Companion Script: Ali"         →  same (handled by colon normalisation)
+   */
+  const ARTIFACT_NAME_TRANSLATIONS = {
+    'companion script: ibn masud': 'companion script: abdullah',
+    "companion script: ubay ibn ka'b": 'companion script: ubay'
   };
 
   const COL_RED = '#e84545';
@@ -583,7 +599,9 @@
           // For Plushie/Flower, match against ALL_ITEM_NAMES only
           let storeName = null;
           if (isArtifact) {
-            storeName = rawName;
+            // Normalise colon spacing (API returns "Companion Script : Ali";
+            // we store as "Companion Script: Ali" for consistent lookup).
+            storeName = rawName.replace(/\s*:\s*/g, ': ');
           } else {
             const lcItemName = rawName.toLowerCase();
             for (let ni = 0; ni < ALL_ITEM_NAMES.length; ni++) {
@@ -1201,17 +1219,21 @@
       // Fix parent overflow so the outline and country label aren't clipped
       makeAncestorsOverflowVisible(container);
 
-      // Attach price for hover tooltip (data attribute — no per-element listener needed).
-      // Fall back to case-insensitive / substring matching when the API item name and
-      // the DOM-discovered name differ in case or in whether they include "Sculpture" etc.
-      let itemPrice = tcmndItemPrices[assignment.name];
+      // Resolve the lookup name: normalise colon spacing and apply any known
+      // name translation (e.g. DOM "Companion Script: Ibn Masud" →
+      // API "Companion Script: Abdullah").
+      const rawAssignName = assignment.name.replace(/\s*:\s*/g, ': ');
+      const translatedLc = ARTIFACT_NAME_TRANSLATIONS[rawAssignName.toLowerCase()];
+      const resolvedLookupLc = translatedLc || rawAssignName.toLowerCase();
+
+      // Price lookup: exact → translation → case-insensitive/substring fallback
+      let itemPrice = tcmndItemPrices[assignment.name] || tcmndItemPrices[rawAssignName];
       if (!itemPrice) {
-        const priceLc = assignment.name.toLowerCase();
         const priceKey = Object.keys(tcmndItemPrices).find(function (k) {
           const kLc = k.toLowerCase();
-          if (kLc === priceLc) return true;
-          const shorter = kLc.length < priceLc.length ? kLc : priceLc;
-          const longer = kLc.length < priceLc.length ? priceLc : kLc;
+          if (kLc === resolvedLookupLc) return true;
+          const shorter = kLc.length < resolvedLookupLc.length ? kLc : resolvedLookupLc;
+          const longer = kLc.length < resolvedLookupLc.length ? resolvedLookupLc : kLc;
           return shorter.length >= 5 && longer.indexOf(shorter) !== -1;
         });
         itemPrice = priceKey ? tcmndItemPrices[priceKey] : undefined;
@@ -1225,15 +1247,16 @@
       badge.textContent = String(assignment.count);
       container.appendChild(badge);
 
-      // Country label — same case-insensitive / substring fallback as price.
-      let country = ITEM_COUNTRIES[assignment.name] || tcmndItemCountries[assignment.name];
+      // Country label: exact → translation → case-insensitive/substring fallback
+      let country = ITEM_COUNTRIES[assignment.name] ||
+        tcmndItemCountries[assignment.name] ||
+        tcmndItemCountries[rawAssignName];
       if (!country) {
-        const countryLc = assignment.name.toLowerCase();
         const countryKey = Object.keys(tcmndItemCountries).find(function (k) {
           const kLc = k.toLowerCase();
-          if (kLc === countryLc) return true;
-          const shorter = kLc.length < countryLc.length ? kLc : countryLc;
-          const longer = kLc.length < countryLc.length ? countryLc : kLc;
+          if (kLc === resolvedLookupLc) return true;
+          const shorter = kLc.length < resolvedLookupLc.length ? kLc : resolvedLookupLc;
+          const longer = kLc.length < resolvedLookupLc.length ? resolvedLookupLc : kLc;
           return shorter.length >= 5 && longer.indexOf(shorter) !== -1;
         });
         country = countryKey ? tcmndItemCountries[countryKey] : 'Unknown';
@@ -2007,7 +2030,7 @@
           const qm = raw.match(/^\d+\s*[xX]\s+(.+)$/);
           return qm ? qm[1].trim() : raw;
         }());
-        if (bCT.length >= 5 && bCT.length <= 30 &&
+        if (bCT.length >= 5 && bCT.length <= 50 &&
             bCT.indexOf(' ') !== -1 &&
             /^[A-Z][a-z]/.test(bCT) &&
             !/\d/.test(bCT) &&
@@ -2123,7 +2146,7 @@
       // Strip leading quantity prefix (e.g. "5 x " from "5 x Senet Piece")
       const qm = raw.match(/^\d+\s*[xX]\s+(.+)$/);
       const t = qm ? qm[1].trim() : raw;
-      if (t.length >= 5 && t.length <= 30 &&
+      if (t.length >= 5 && t.length <= 50 &&
           t.indexOf(' ') !== -1 &&
           /^[A-Z][a-z]/.test(t) &&
           !/\d/.test(t) &&
