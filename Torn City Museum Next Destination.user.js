@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.47
+// @version      1.0.48
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.47';
+  const VERSION = '1.0.48';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1201,8 +1201,21 @@
       // Fix parent overflow so the outline and country label aren't clipped
       makeAncestorsOverflowVisible(container);
 
-      // Attach price for hover tooltip (data attribute — no per-element listener needed)
-      const itemPrice = tcmndItemPrices[assignment.name];
+      // Attach price for hover tooltip (data attribute — no per-element listener needed).
+      // Fall back to case-insensitive / substring matching when the API item name and
+      // the DOM-discovered name differ in case or in whether they include "Sculpture" etc.
+      let itemPrice = tcmndItemPrices[assignment.name];
+      if (!itemPrice) {
+        const priceLc = assignment.name.toLowerCase();
+        const priceKey = Object.keys(tcmndItemPrices).find(function (k) {
+          const kLc = k.toLowerCase();
+          if (kLc === priceLc) return true;
+          const shorter = kLc.length < priceLc.length ? kLc : priceLc;
+          const longer = kLc.length < priceLc.length ? priceLc : kLc;
+          return shorter.length >= 5 && longer.indexOf(shorter) !== -1;
+        });
+        itemPrice = priceKey ? tcmndItemPrices[priceKey] : undefined;
+      }
       if (itemPrice) {
         container.setAttribute('data-tcmnd-price', String(itemPrice));
       }
@@ -1212,7 +1225,20 @@
       badge.textContent = String(assignment.count);
       container.appendChild(badge);
 
-      const country = ITEM_COUNTRIES[assignment.name] || tcmndItemCountries[assignment.name] || 'Unknown';
+      // Country label — same case-insensitive / substring fallback as price.
+      let country = ITEM_COUNTRIES[assignment.name] || tcmndItemCountries[assignment.name];
+      if (!country) {
+        const countryLc = assignment.name.toLowerCase();
+        const countryKey = Object.keys(tcmndItemCountries).find(function (k) {
+          const kLc = k.toLowerCase();
+          if (kLc === countryLc) return true;
+          const shorter = kLc.length < countryLc.length ? kLc : countryLc;
+          const longer = kLc.length < countryLc.length ? countryLc : kLc;
+          return shorter.length >= 5 && longer.indexOf(shorter) !== -1;
+        });
+        country = countryKey ? tcmndItemCountries[countryKey] : 'Unknown';
+      }
+      if (!country) country = 'Unknown';
       const label = document.createElement('span');
       label.className = 'tcmnd-country tcmnd-country-' + TIER_CSS[assignment.colorIndex];
       label.textContent = '\u2708 ' + country;
@@ -1975,7 +2001,12 @@
           bCN = bCW.nextNode();
           continue; // skip elements inside the exchange-header paragraph
         }
-        const bCT = bCN.textContent.trim();
+        const bCT = (function () {
+          const raw = bCN.textContent.trim();
+          // Strip leading quantity prefix such as "5 x " from "5 x Senet Piece"
+          const qm = raw.match(/^\d+\s*[xX]\s+(.+)$/);
+          return qm ? qm[1].trim() : raw;
+        }());
         if (bCT.length >= 5 && bCT.length <= 30 &&
             bCT.indexOf(' ') !== -1 &&
             /^[A-Z][a-z]/.test(bCT) &&
@@ -2088,7 +2119,10 @@
     const walker = document.createTreeWalker(containerEl, NodeFilter.SHOW_TEXT, null, false);
     let node = walker.nextNode();
     while (node) {
-      const t = node.textContent.trim();
+      const raw = node.textContent.trim();
+      // Strip leading quantity prefix (e.g. "5 x " from "5 x Senet Piece")
+      const qm = raw.match(/^\d+\s*[xX]\s+(.+)$/);
+      const t = qm ? qm[1].trim() : raw;
       if (t.length >= 5 && t.length <= 30 &&
           t.indexOf(' ') !== -1 &&
           /^[A-Z][a-z]/.test(t) &&
