@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         TORN CITY Museum Next Destination
 // @namespace    sanxion.tc.museumnextdestination
-// @version      1.0.49
+// @version      1.0.50
 // @description  Highlights the plushies and flowers of which you have least stock. Shows which countries to visit next.
 // @author       Sanxion [2987640]
 // @match        https://www.torn.com/museum.php*
@@ -21,7 +21,7 @@
    * ========================================================= */
 
   const SCRIPT_NAME = 'TORN CITY Museum Next Destination';
-  const VERSION = '1.0.49';
+  const VERSION = '1.0.50';
   const AUTHOR_NAME = 'Sanxion';
   const AUTHOR_ID = '2987640';
   const STORAGE_KEY_API = 'tcmnd_apiKey';
@@ -1348,6 +1348,16 @@
       '<a href="https://www.torn.com/profiles.php?XID=' + AUTHOR_ID + '"' +
       ' target="_blank" rel="noopener noreferrer">' +
       AUTHOR_NAME + ' [' + AUTHOR_ID + ']' +
+      '</a>' +
+      '<br>' +
+      '<a href="https://www.torn.com/forums.php#/p=threads&f=67&t=16561948&b=0&a=0&start=0&to=0"' +
+      ' target="_blank" rel="noopener noreferrer">' +
+      'Forum link: Bugs, feedback and LIKES welcome!' +
+      '</a>' +
+      '<br>' +
+      '<a href="https://greasyfork.org/en/users/1593713-quantarallax?sort=total_installs"' +
+      ' target="_blank" rel="noopener noreferrer">' +
+      "Sanxion's Other Scripts" +
       '</a>' +
       '</div>' +
       '</div>'
